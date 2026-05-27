@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use mc_snap_core::yml::ModEntry;
-use mc_snap_core::{ModProvider, ModSpec, ResolveEnv, ResolvedMod};
+use mc_snap_core::{AvailableVersion, ModProvider, ModSpec, ResolveEnv, ResolvedMod};
 use serde::Deserialize;
 
 const API: &str = "https://api.modrinth.com/v2";
@@ -39,6 +39,8 @@ struct Version {
     game_versions: Vec<String>,
     loaders: Vec<String>,
     files: Vec<VersionFile>,
+    #[serde(default)]
+    date_published: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,5 +155,44 @@ impl ModProvider for Modrinth {
             url: file.url.clone(),
             sha256,
         })
+    }
+
+    async fn list_versions(
+        &self,
+        spec: &ModSpec,
+        env: &ResolveEnv,
+    ) -> anyhow::Result<Vec<AvailableVersion>> {
+        let id = match &spec.0 {
+            ModEntry::Registry { id, .. } => id.clone(),
+            ModEntry::Url { .. } => {
+                anyhow::bail!("modrinth provider cannot list versions for url entries")
+            }
+        };
+
+        let url = format!("{}/project/{}/version", self.base, id);
+        let mut query: Vec<(&str, String)> =
+            vec![("loaders", format!("[\"{}\"]", env.loader_kind))];
+        if !env.minecraft.is_empty() {
+            query.push(("game_versions", format!("[\"{}\"]", env.minecraft)));
+        }
+        let versions: Vec<Version> = self
+            .client
+            .get(&url)
+            .query(&query)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+
+        Ok(versions
+            .into_iter()
+            .map(|v| AvailableVersion {
+                version_number: v.version_number,
+                game_versions: v.game_versions,
+                loaders: v.loaders,
+                date_published: v.date_published,
+            })
+            .collect())
     }
 }

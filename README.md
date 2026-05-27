@@ -6,7 +6,7 @@ Think "docker-compose for Minecraft servers".
 
 ## Status
 
-Working: Vanilla and Fabric loaders, Modrinth and direct-URL mod providers, install / start / stop / status / logs / console / pack / unpack / validate / doctor, system Java discovery with Adoptium Temurin auto-download fallback, content-addressed jar cache, RCON-based lifecycle, source bundles.
+Working: Vanilla and Fabric loaders, Modrinth and direct-URL mod providers, install / start / stop / status / logs / console / pack / unpack / validate / doctor / check / updatable / search / update / revert, system Java discovery with Adoptium Temurin auto-download fallback, content-addressed jar cache, RCON-based lifecycle, source bundles, snapshot-based version updates.
 
 Tracks the Minecraft 26.x series; default scaffold pins 26.1.2 + Java 26. Tested on Linux with system Java 26. Windows hardlink path exists but is untested.
 
@@ -86,6 +86,11 @@ config:
 | `mc-snap console [cmd...]` | One-shot RCON command, or interactive shell |
 | `mc-snap pack -o out.zip` | Bundle `mc-snap.yml` + `mc-snap.lock` + `configs/` |
 | `mc-snap unpack <bundle.zip>` | Extract a bundle into the current directory |
+| `mc-snap check --to <ver>` | Per-mod compatibility report against a target Minecraft version; no filesystem changes |
+| `mc-snap updatable [--to <ver>]` | With `--to`: yes/no for that version. Without: the newest Minecraft version every mod supports |
+| `mc-snap search` | List newer mod versions available for the current Minecraft version |
+| `mc-snap update --to <ver> [--skip-missing] [--loader <ver>]` | Snapshot, then update mc-snap.yml + lockfile to a new Minecraft version. Resolves mods against the new version first; prompts if any are missing, or use `--skip-missing` to drop them automatically |
+| `mc-snap revert [<id>]` / `--list` | Restore the most recent snapshot (or named one); `--list` shows all snapshots |
 
 ## Layout
 
@@ -98,6 +103,7 @@ my-server/
 ├── configs/           # external config files; commit these
 └── .mc-snap/          # generated; gitignore this
     ├── server/        # actual Minecraft server root
+    ├── snapshots/     # pre-update snapshots of yml + lock + configs (for `revert`)
     ├── state.json     # last-applied lockfile hash
     ├── pid            # present when running
     └── rcon.secret    # auto-generated RCON password

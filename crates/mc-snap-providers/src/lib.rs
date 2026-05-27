@@ -1,7 +1,7 @@
 pub mod modrinth;
 pub mod url;
 
-use mc_snap_core::{ModProvider, ModSpec, ResolveEnv, ResolvedMod};
+use mc_snap_core::{AvailableVersion, ModProvider, ModSpec, ResolveEnv, ResolvedMod};
 use mc_snap_core::yml::ModEntry;
 use std::sync::Arc;
 
@@ -27,6 +27,19 @@ pub async fn resolve_entry(
     for p in registry() {
         if p.id() == id {
             return p.resolve(&ModSpec(entry.clone()), env).await;
+        }
+    }
+    anyhow::bail!("unknown mod provider: {id}")
+}
+
+pub async fn list_versions_for_entry(
+    entry: &ModEntry,
+    env: &ResolveEnv,
+) -> anyhow::Result<Vec<AvailableVersion>> {
+    let id = provider_id(entry);
+    for p in registry() {
+        if p.id() == id {
+            return p.list_versions(&ModSpec(entry.clone()), env).await;
         }
     }
     anyhow::bail!("unknown mod provider: {id}")

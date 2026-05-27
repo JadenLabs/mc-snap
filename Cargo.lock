@@ -1045,6 +1045,7 @@ dependencies = [
  "mc-snap-providers",
  "mc-snap-runtime",
  "serde_yml",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

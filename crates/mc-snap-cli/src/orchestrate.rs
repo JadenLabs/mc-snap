@@ -203,6 +203,155 @@ pub fn read_rcon_password(layout: &ProjectLayout) -> Result<String> {
     Ok(s.trim().to_string())
 }
 
+/// Remove mod jars and stale launch jars from the server dir that are not in `lock`.
+/// World data and config files are left alone.
+pub fn clean_stale_artifacts(layout: &ProjectLayout, lock: &Lock) -> Result<()> {
+    let server_dir = layout.server_dir();
+    let mods_dir = server_dir.join("mods");
+    if mods_dir.is_dir() {
+        let expected: std::collections::HashSet<&str> =
+            lock.mods.iter().map(|m| m.filename.as_str()).collect();
+        for entry in std::fs::read_dir(&mods_dir)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let name_s = name.to_string_lossy().to_string();
+            if !expected.contains(name_s.as_str()) {
+                let p = entry.path();
+                if p.is_file() || p.is_symlink() {
+                    std::fs::remove_file(&p).with_context(|| {
+                        format!("removing stale mod {}", p.display())
+                    })?;
+                }
+            }
+        }
+    }
+
+    let expected_launch = match lock.loader.kind.as_str() {
+        "fabric" => "fabric-server-launch.jar",
+        _ => "server.jar",
+    };
+    for name in ["fabric-server-launch.jar", "server.jar"] {
+        if name == expected_launch {
+            continue;
+        }
+        let p = server_dir.join(name);
+        if p.exists() {
+            std::fs::remove_file(&p)
+                .with_context(|| format!("removing stale launch jar {}", p.display()))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mc_snap_core::lock::{LockLoader, LockMod};
+    use tempfile::TempDir;
+
+    fn lock_with(loader_kind: &str, mod_filenames: &[&str]) -> Lock {
+        Lock {
+            schema: 1,
+            yml_hash: "a".repeat(64),
+            loader: LockLoader {
+                kind: loader_kind.into(),
+                minecraft: "26.1.2".into(),
+                loader_version: None,
+                installer_version: None,
+                server_jar_url: "u".into(),
+                server_jar_sha256: "b".repeat(64),
+                extra: vec![],
+            },
+            mods: mod_filenames
+                .iter()
+                .map(|f| LockMod {
+                    id: f.trim_end_matches(".jar").into(),
+                    provider: "modrinth".into(),
+                    version: "1.0".into(),
+                    filename: (*f).into(),
+                    url: "u".into(),
+                    sha256: "c".repeat(64),
+                })
+                .collect(),
+            jdk: None,
+        }
+    }
+
+    #[test]
+    fn removes_stale_mods_and_wrong_launch_jar() {
+        let td = TempDir::new().unwrap();
+        let layout = ProjectLayout::at(td.path().to_path_buf());
+        let mods = layout.server_dir().join("mods");
+        std::fs::create_dir_all(&mods).unwrap();
+
+        std::fs::write(mods.join("fabric-api.jar"), b"keep").unwrap();
+        std::fs::write(mods.join("oldmod.jar"), b"stale").unwrap();
+        std::fs::write(layout.server_dir().join("server.jar"), b"stale-vanilla").unwrap();
+        std::fs::write(
+            layout.server_dir().join("fabric-server-launch.jar"),
+            b"keep-fabric",
+        )
+        .unwrap();
+        // World data and arbitrary configs should be left alone.
+        std::fs::create_dir_all(layout.server_dir().join("world")).unwrap();
+        std::fs::write(layout.server_dir().join("world").join("level.dat"), b"world").unwrap();
+
+        let lock = lock_with("fabric", &["fabric-api.jar"]);
+        clean_stale_artifacts(&layout, &lock).unwrap();
+
+        assert!(mods.join("fabric-api.jar").exists(), "expected mod kept");
+        assert!(!mods.join("oldmod.jar").exists(), "stale mod removed");
+        assert!(
+            !layout.server_dir().join("server.jar").exists(),
+            "stale vanilla launch jar removed for fabric loader"
+        );
+        assert!(
+            layout
+                .server_dir()
+                .join("fabric-server-launch.jar")
+                .exists(),
+            "expected fabric launch jar kept"
+        );
+        assert!(
+            layout.server_dir().join("world").join("level.dat").exists(),
+            "world preserved"
+        );
+    }
+
+    #[test]
+    fn keeps_vanilla_jar_when_loader_is_vanilla() {
+        let td = TempDir::new().unwrap();
+        let layout = ProjectLayout::at(td.path().to_path_buf());
+        std::fs::create_dir_all(layout.server_dir().join("mods")).unwrap();
+        std::fs::write(layout.server_dir().join("server.jar"), b"keep").unwrap();
+        std::fs::write(
+            layout.server_dir().join("fabric-server-launch.jar"),
+            b"stale-fabric",
+        )
+        .unwrap();
+
+        let lock = lock_with("vanilla", &[]);
+        clean_stale_artifacts(&layout, &lock).unwrap();
+
+        assert!(layout.server_dir().join("server.jar").exists());
+        assert!(
+            !layout
+                .server_dir()
+                .join("fabric-server-launch.jar")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn is_noop_when_server_dir_missing() {
+        let td = TempDir::new().unwrap();
+        let layout = ProjectLayout::at(td.path().to_path_buf());
+        let lock = lock_with("fabric", &["x.jar"]);
+        // Should not error even though .mc-snap/server does not exist.
+        clean_stale_artifacts(&layout, &lock).unwrap();
+    }
+}
+
 pub fn rcon_address(snap: &Snap) -> String {
     let port = snap
         .config

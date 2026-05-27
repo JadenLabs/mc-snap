@@ -176,6 +176,52 @@ if [ "$stopped" -ne 1 ]; then
 fi
 green "server stopped"
 
+step "check (compatibility report against current MC; should exit 0)"
+(cd "$TEST_DIR" && "$BIN" check --to "$MC_VERSION")
+
+step "search (newer mod versions on current MC)"
+(cd "$TEST_DIR" && "$BIN" search)
+
+step "updatable --to current (rejects no-op upgrade)"
+ua_out=$(cd "$TEST_DIR" && "$BIN" updatable --to "$MC_VERSION")
+echo "$ua_out"
+echo "$ua_out" | grep -q "not newer" || { red "updatable did not reject same-version target"; exit 1; }
+
+step "update --to current (early-exit, no snapshot)"
+update_out=$(cd "$TEST_DIR" && "$BIN" update --to "$MC_VERSION")
+echo "$update_out"
+echo "$update_out" | grep -q "already at" || { red "update did not short-circuit on same-version"; exit 1; }
+[ ! -d "$TEST_DIR/.mc-snap/snapshots" ] || \
+    [ -z "$(ls -A "$TEST_DIR/.mc-snap/snapshots" 2>/dev/null)" ] || \
+    { red "snapshot created on no-op update"; exit 1; }
+
+step "revert --list on empty (should report no snapshots)"
+revert_out=$(cd "$TEST_DIR" && "$BIN" revert --list)
+echo "$revert_out"
+echo "$revert_out" | grep -q "no snapshots" || { red "revert --list did not say 'no snapshots'"; exit 1; }
+
+if [ -n "${MC_SNAP_E2E_UPDATE_TO:-}" ]; then
+    step "update --to $MC_SNAP_E2E_UPDATE_TO --skip-missing (real update)"
+    (cd "$TEST_DIR" && "$BIN" update --to "$MC_SNAP_E2E_UPDATE_TO" --skip-missing)
+
+    yml_mc=$(grep -E '^\s*minecraft:' "$TEST_DIR/mc-snap.yml" | awk '{print $2}')
+    [ "$yml_mc" = "$MC_SNAP_E2E_UPDATE_TO" ] || { red "yml not updated to $MC_SNAP_E2E_UPDATE_TO (got $yml_mc)"; exit 1; }
+
+    snap_id=$(ls "$TEST_DIR/.mc-snap/snapshots" | head -n 1)
+    [ -n "$snap_id" ] || { red "no snapshot created during real update"; exit 1; }
+    [ -f "$TEST_DIR/.mc-snap/snapshots/$snap_id/mc-snap.yml" ] || { red "snapshot missing yml"; exit 1; }
+    [ -f "$TEST_DIR/.mc-snap/snapshots/$snap_id/meta.toml" ]   || { red "snapshot missing meta"; exit 1; }
+    green "snapshot $snap_id created with previous yml"
+
+    step "revert (most recent)"
+    (cd "$TEST_DIR" && "$BIN" revert)
+    yml_mc=$(grep -E '^\s*minecraft:' "$TEST_DIR/mc-snap.yml" | awk '{print $2}')
+    [ "$yml_mc" = "$MC_VERSION" ] || { red "revert did not restore mc to $MC_VERSION (got $yml_mc)"; exit 1; }
+    green "reverted back to $MC_VERSION"
+else
+    echo "(skipping real update/revert; set MC_SNAP_E2E_UPDATE_TO=<ver> to enable)"
+fi
+
 step "pack"
 (cd "$TEST_DIR" && "$BIN" pack -o "$BUNDLE")
 [ -f "$BUNDLE" ] || { red "bundle not written"; exit 1; }

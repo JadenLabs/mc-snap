@@ -134,6 +134,95 @@ async fn rejects_unsupported_minecraft() {
 }
 
 #[tokio::test]
+async fn list_versions_filters_by_minecraft() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/project/fabric-api/version"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "id": "v3", "version_number": "0.141.0",
+                "game_versions": ["26.1.3"], "loaders": ["fabric"],
+                "files": [{
+                    "url": "u3", "filename": "f3.jar",
+                    "hashes": {"sha512": "a".repeat(128)}, "primary": true
+                }],
+                "date_published": "2026-05-01T00:00:00Z"
+            },
+            {
+                "id": "v2", "version_number": "0.140.0",
+                "game_versions": ["26.1.2"], "loaders": ["fabric"],
+                "files": [{
+                    "url": "u2", "filename": "f2.jar",
+                    "hashes": {"sha512": "b".repeat(128)}, "primary": true
+                }]
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    let p = Modrinth::with_base(server.uri());
+    let versions = p
+        .list_versions(&registry_spec("latest"), &env())
+        .await
+        .unwrap();
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions[0].version_number, "0.141.0");
+    assert_eq!(versions[0].game_versions, vec!["26.1.3"]);
+    assert_eq!(versions[0].loaders, vec!["fabric"]);
+    assert_eq!(
+        versions[0].date_published.as_deref(),
+        Some("2026-05-01T00:00:00Z")
+    );
+    assert_eq!(versions[1].version_number, "0.140.0");
+    assert!(versions[1].date_published.is_none());
+}
+
+#[tokio::test]
+async fn list_versions_with_empty_minecraft_omits_filter() {
+    let server = MockServer::start().await;
+    // No `game_versions` query param expected when minecraft is empty.
+    Mock::given(method("GET"))
+        .and(path("/project/fabric-api/version"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {
+                "id": "any", "version_number": "9.9.9",
+                "game_versions": ["26.1.1", "26.1.2", "26.1.3"],
+                "loaders": ["fabric"],
+                "files": [{
+                    "url": "u", "filename": "f.jar",
+                    "hashes": {"sha512": "c".repeat(128)}, "primary": true
+                }]
+            }
+        ])))
+        .mount(&server)
+        .await;
+
+    let mut env_all = env();
+    env_all.minecraft = String::new();
+    let p = Modrinth::with_base(server.uri());
+    let versions = p
+        .list_versions(&registry_spec("latest"), &env_all)
+        .await
+        .unwrap();
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0].game_versions.len(), 3);
+}
+
+#[tokio::test]
+async fn list_versions_rejects_url_entries() {
+    let server = MockServer::start().await;
+    let p = Modrinth::with_base(server.uri());
+    let spec = ModSpec(ModEntry::Url {
+        url: "https://example.com/x.jar".into(),
+        provider: "url".into(),
+        sha256: "0".repeat(64),
+        filename: None,
+    });
+    let err = p.list_versions(&spec, &env()).await.unwrap_err();
+    assert!(err.to_string().contains("cannot list versions"));
+}
+
+#[tokio::test]
 async fn detects_sha512_mismatch() {
     let server = MockServer::start().await;
     let jar = b"REAL_BYTES".to_vec();
