@@ -15,7 +15,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    Init,
+    /// Create a new mc-snap.yml in the current directory (interactive wizard).
+    Init {
+        /// Skip the interactive wizard and write the default template.
+        #[arg(long)]
+        non_interactive: bool,
+    },
     Install,
     Validate,
     Doctor,
@@ -91,7 +96,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Init => commands::init::run().await,
+        Cmd::Init { non_interactive } => commands::init::run(non_interactive).await,
         Cmd::Install => commands::install::run().await,
         Cmd::Validate => commands::validate::run().await,
         Cmd::Doctor => commands::doctor::run().await,
