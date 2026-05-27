@@ -8,7 +8,7 @@ Think "docker-compose for Minecraft servers".
 
 Working: Vanilla and Fabric loaders, Modrinth and direct-URL mod providers, install / start / stop / status / logs / console / pack / unpack / validate / doctor, system Java discovery with Adoptium Temurin auto-download fallback, content-addressed jar cache, RCON-based lifecycle, source bundles.
 
-Tested on Linux (system Java 21+). Windows hardlink path exists but is untested.
+Tracks the Minecraft 26.x series; default scaffold pins 26.1.2 + Java 26. Tested on Linux with system Java 26. Windows hardlink path exists but is untested.
 
 ## Install
 
@@ -19,7 +19,7 @@ cargo build --release
 # binary lives at target/release/mc-snap
 ```
 
-Requires a system `java` (any version) for the doctor probe; the configured server Java is auto-downloaded if missing.
+Requires a system `java` (any version) for the doctor probe. Minecraft 26.x needs Java 26 at runtime; if your system Java is older, mc-snap auto-downloads Temurin 26 into `~/.local/share/mc-snap/jdks/`.
 
 ## Quickstart
 
@@ -46,12 +46,12 @@ eula: true
 server:
   name: grimwald
   description: the grimwald smp
-  minecraft: 1.21.4
+  minecraft: 26.1.2
   loader:
     type: fabric
 
 runtime:
-  java: 21
+  java: 26
   memory: 4G
   flags:
     - -XX:+UseG1GC

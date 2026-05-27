@@ -7,12 +7,12 @@ eula: false
 server:
   name: my-server
   description: a mc-snap server
-  minecraft: 1.21.4
+  minecraft: 26.1.2
   loader:
     type: fabric
 
 runtime:
-  java: 21
+  java: 26
   memory: 4G
   flags:
     - -XX:+UseG1GC

@@ -6,7 +6,7 @@ const SHA: &str = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadb
 
 fn env() -> ResolveEnv {
     ResolveEnv {
-        minecraft: "1.21.4".into(),
+        minecraft: "26.1.2".into(),
         loader_kind: "fabric".into(),
         loader_version: None,
     }

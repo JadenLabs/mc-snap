@@ -33,14 +33,14 @@ schema: 1                    # for future migrations
 server:
   name: grimwald
   description: the grimwald smp
-  minecraft: 1.21.4          # Minecraft version
+  minecraft: 26.1.2          # Minecraft version (26.x is the current series)
   loader:
     type: fabric             # fabric | vanilla
-    version: 0.16.9          # loader version (optional - latest stable if omitted)
-    installer: 1.0.1         # fabric installer version (optional)
+    version: 0.17.4          # loader version (optional - latest stable if omitted)
+    installer: 1.1.0         # fabric installer version (optional)
 
 runtime:
-  java: 21                   # major version
+  java: 26                   # major version (mc 26.x requires Java 26)
   memory: 4G                 # becomes -Xmx and -Xms
   flags:                     # extra JVM flags appended after memory
     - -XX:+UseG1GC
@@ -48,7 +48,7 @@ runtime:
 mods:
   - id: fabric-api
     provider: modrinth
-    version: "0.110.0+1.21.4"
+    version: "0.140.0+26.1.2"
   - id: sodium
     provider: modrinth
     version: latest          # resolved + pinned in lockfile
@@ -66,7 +66,7 @@ config:
 ```
 
 **Notes**
-- `minecraft:` is the Minecraft version. The user's first sketch used `version: 26.1.2`, which isn't a real MC version - clarified by giving it its own field.
+- `minecraft:` is the Minecraft version. Pulled out into its own field rather than living next to `loader.type` so loader-specific version fields nest naturally beneath the loader.
 - `loader.type` replaces a top-level `type:` so loader-specific version fields nest naturally.
 - `provider: url` requires `sha256` - no unpinned remote downloads.
 - `eula: true` will be required at the top level on first install (legal).
@@ -170,22 +170,30 @@ yml_hash = "sha256:..."           # mc-snap.yml hash at lock time
 
 [loader]
 type = "fabric"
-minecraft = "1.21.4"
-loader_version = "0.16.9"
-installer_version = "1.0.1"
+minecraft = "26.1.2"
+loader_version = "0.17.4"
+installer_version = "1.1.0"
 server_jar_url = "..."
 server_jar_sha256 = "..."
 
 [[mods]]
 id = "fabric-api"
 provider = "modrinth"
-version = "0.110.0+1.21.4"
-filename = "fabric-api-0.110.0+1.21.4.jar"
+version = "0.140.0+26.1.2"
+filename = "fabric-api-0.140.0+26.1.2.jar"
 url = "https://cdn.modrinth.com/..."
 sha256 = "..."
 ```
 
 `install` is a no-op when `state.json.applied_lock_hash == sha256(mc-snap.lock)`.
+
+## Minecraft 26.x support
+
+The 26.x series is the current default. Concretely, supporting it meant:
+
+- **Java 26 baseline.** The `init` scaffold pins `java: 26` and the `start` fallback uses 26 when `runtime.java` is unset. Older system JDKs trigger an Adoptium Temurin 26 download into `~/.local/share/mc-snap/jdks/26/<os>-<arch>/`.
+- **Version strings are opaque.** Loader and provider code passes the `minecraft:` value straight through to Mojang's version manifest, Fabric Meta, and Modrinth's `game_versions` filter. The year-based `26.x.x` format works without parser changes because nothing splits on dots.
+- **Fabric loader/installer versions.** The defaults committed in DESIGN/README examples (`0.17.4` / `1.1.0`) track the first stable Fabric release for 26.1.2; users can pin or omit (latest stable resolves at install time).
 
 ## Implementation notes (resolved during the build)
 
@@ -209,4 +217,4 @@ What ships in the repo:
 
 1. **Unit tests** colocated with each crate - schema parsing, lockfile round-trip, RCON framing, Java version parsing.
 2. **Wiremock integration tests** in `crates/mc-snap-providers/tests/` and `crates/mc-snap-loaders/tests/` - exercise Modrinth, URL, Mojang manifest, and Fabric Meta against stubbed HTTP servers.
-3. **Live end-to-end** in `scripts/e2e.sh` - builds the binary, scaffolds a Fabric 1.21.4 + fabric-api server under `.dev-servers/e2e/`, runs the full lifecycle (`install` x2, `start --detach`, boot wait, `status`, `console list`, `console say`, `logs`, `stop`), then `pack` -> fresh dir -> `unpack` -> `validate`. Driven by `make e2e`.
+3. **Live end-to-end** in `scripts/e2e.sh` - builds the binary, scaffolds a Fabric 26.1.2 + fabric-api server under `.dev-servers/e2e/`, runs the full lifecycle (`install` x2, `start --detach`, boot wait, `status`, `console list`, `console say`, `logs`, `stop`), then `pack` -> fresh dir -> `unpack` -> `validate`. Driven by `make e2e`.

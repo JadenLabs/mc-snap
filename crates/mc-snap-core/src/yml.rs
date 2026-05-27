@@ -123,19 +123,19 @@ eula: true
 server:
   name: grimwald
   description: the grimwald smp
-  minecraft: 1.21.4
+  minecraft: 26.1.2
   loader:
     type: fabric
     version: 0.16.9
 runtime:
-  java: 21
+  java: 26
   memory: 4G
   flags:
     - -XX:+UseG1GC
 mods:
   - id: fabric-api
     provider: modrinth
-    version: "0.110.0+1.21.4"
+    version: "0.140.0+26.1.2"
   - url: https://example.com/mymod.jar
     provider: url
     sha256: 0000000000000000000000000000000000000000000000000000000000000000
@@ -151,7 +151,7 @@ config:
         assert_eq!(snap.server.name, "grimwald");
         assert_eq!(snap.server.loader.kind, "fabric");
         assert_eq!(snap.mods.len(), 2);
-        assert_eq!(snap.runtime.java, Some(21));
+        assert_eq!(snap.runtime.java, Some(26));
     }
 
     #[test]
@@ -160,7 +160,7 @@ config:
 schema: 1
 server:
   name: x
-  minecraft: 1.21.4
+  minecraft: 26.1.2
   loader: { type: vanilla }
 mods:
   - url: https://example.com/x.jar
@@ -172,7 +172,7 @@ mods:
 
     #[test]
     fn rejects_wrong_schema() {
-        let bad = "schema: 2\nserver:\n  name: x\n  minecraft: 1.21.4\n  loader: { type: vanilla }\n";
+        let bad = "schema: 2\nserver:\n  name: x\n  minecraft: 26.1.2\n  loader: { type: vanilla }\n";
         assert!(Snap::from_str(bad).is_err());
     }
 }

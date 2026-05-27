@@ -11,7 +11,7 @@ UNPACK_DIR="$DEV/e2e-unpacked"
 
 SERVER_PORT="${MC_SNAP_E2E_PORT:-25569}"
 RCON_PORT="${MC_SNAP_E2E_RCON_PORT:-25579}"
-MC_VERSION="${MC_SNAP_E2E_MC:-1.21.4}"
+MC_VERSION="${MC_SNAP_E2E_MC:-26.1.2}"
 BOOT_TIMEOUT="${MC_SNAP_E2E_BOOT_TIMEOUT:-300}"
 STOP_TIMEOUT="${MC_SNAP_E2E_STOP_TIMEOUT:-60}"
 
@@ -53,9 +53,9 @@ if [ -z "$JAVA_MAJOR" ] || ! [[ "$JAVA_MAJOR" =~ ^[0-9]+$ ]]; then
     red "could not parse java major version"
     exit 2
 fi
-if [ "$JAVA_MAJOR" -lt 21 ]; then
-    JAVA_VER=21
-    echo "system java $JAVA_MAJOR too old, will let mc-snap fetch Temurin $JAVA_VER"
+if [ "$JAVA_MAJOR" -lt 26 ]; then
+    JAVA_VER=26
+    echo "system java $JAVA_MAJOR too old for mc 26.x, will let mc-snap fetch Temurin $JAVA_VER"
 else
     JAVA_VER=$JAVA_MAJOR
     echo "using system java $JAVA_VER"

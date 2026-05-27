@@ -19,7 +19,7 @@ pub async fn run(detach: bool) -> Result<()> {
         process::clear_pid(&layout.pid_file());
     }
 
-    let required_major = snap.runtime.java.unwrap_or(21);
+    let required_major = snap.runtime.java.unwrap_or(26);
     let java_install = ensure_java(required_major).await?;
     info!("using java {} at {}", java_install.major, java_install.bin.display());
 

@@ -19,7 +19,7 @@ async fn resolves_known_version() {
         .and(path("/manifest"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "versions": [
-                { "id": "1.21.4", "url": format!("{}/version/1.21.4.json", server.uri()) },
+                { "id": "26.1.2", "url": format!("{}/version/26.1.2.json", server.uri()) },
                 { "id": "1.20.4", "url": format!("{}/version/1.20.4.json", server.uri()) }
             ]
         })))
@@ -27,7 +27,7 @@ async fn resolves_known_version() {
         .await;
 
     Mock::given(method("GET"))
-        .and(path("/version/1.21.4.json"))
+        .and(path("/version/26.1.2.json"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "downloads": {
                 "server": {
@@ -47,9 +47,9 @@ async fn resolves_known_version() {
         .await;
 
     let v = Vanilla::with_manifest_url(format!("{}/manifest", server.uri()));
-    let r = v.resolve("1.21.4", &spec()).await.unwrap();
+    let r = v.resolve("26.1.2", &spec()).await.unwrap();
     assert_eq!(r.kind, "vanilla");
-    assert_eq!(r.minecraft, "1.21.4");
+    assert_eq!(r.minecraft, "26.1.2");
     assert_eq!(r.launch_jar, "server.jar");
     assert_eq!(r.server_jar_url, format!("{}/server.jar", server.uri()));
     assert_eq!(r.server_jar_sha256, mc_snap_core::cache::sha256_hex(&jar_bytes));
@@ -62,7 +62,7 @@ async fn rejects_unknown_version() {
         .and(path("/manifest"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "versions": [
-                { "id": "1.21.4", "url": "ignored" }
+                { "id": "26.1.2", "url": "ignored" }
             ]
         })))
         .mount(&server)

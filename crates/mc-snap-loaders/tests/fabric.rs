@@ -19,13 +19,13 @@ async fn resolves_with_pinned_versions() {
     let jar_bytes = b"FABRIC_LAUNCHER_JAR".to_vec();
 
     Mock::given(method("GET"))
-        .and(path("/versions/loader/1.21.4/0.16.9/1.0.1/server/jar"))
+        .and(path("/versions/loader/26.1.2/0.16.9/1.0.1/server/jar"))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(jar_bytes.clone()))
         .mount(&server)
         .await;
 
     let f = Fabric::with_base(server.uri());
-    let r = f.resolve("1.21.4", &spec(Some("0.16.9"), Some("1.0.1"))).await.unwrap();
+    let r = f.resolve("26.1.2", &spec(Some("0.16.9"), Some("1.0.1"))).await.unwrap();
     assert_eq!(r.loader_version.as_deref(), Some("0.16.9"));
     assert_eq!(r.installer_version.as_deref(), Some("1.0.1"));
     assert_eq!(r.launch_jar, "fabric-server-launch.jar");
@@ -56,13 +56,13 @@ async fn discovers_latest_when_unpinned() {
         .await;
 
     Mock::given(method("GET"))
-        .and(path("/versions/loader/1.21.4/0.16.9/1.0.1/server/jar"))
+        .and(path("/versions/loader/26.1.2/0.16.9/1.0.1/server/jar"))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(jar_bytes.clone()))
         .mount(&server)
         .await;
 
     let f = Fabric::with_base(server.uri());
-    let r = f.resolve("1.21.4", &spec(None, None)).await.unwrap();
+    let r = f.resolve("26.1.2", &spec(None, None)).await.unwrap();
     assert_eq!(r.loader_version.as_deref(), Some("0.16.9"));
     assert_eq!(r.installer_version.as_deref(), Some("1.0.1"));
 }

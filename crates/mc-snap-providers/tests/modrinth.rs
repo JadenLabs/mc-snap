@@ -14,7 +14,7 @@ fn sha512_hex(b: &[u8]) -> String {
 
 fn env() -> ResolveEnv {
     ResolveEnv {
-        minecraft: "1.21.4".into(),
+        minecraft: "26.1.2".into(),
         loader_kind: "fabric".into(),
         loader_version: None,
     }
@@ -49,8 +49,8 @@ async fn resolves_latest_version() {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
             {
                 "id": "abc",
-                "version_number": "0.110.0+1.21.4",
-                "game_versions": ["1.21.4"],
+                "version_number": "0.140.0+26.1.2",
+                "game_versions": ["26.1.2"],
                 "loaders": ["fabric"],
                 "files": [{
                     "url": file_url,
@@ -66,7 +66,7 @@ async fn resolves_latest_version() {
 
     let p = Modrinth::with_base(server.uri());
     let r = p.resolve(&registry_spec("latest"), &env()).await.unwrap();
-    assert_eq!(r.version, "0.110.0+1.21.4");
+    assert_eq!(r.version, "0.140.0+26.1.2");
     assert_eq!(r.filename, "fabric-api-0.110.0.jar");
     assert_eq!(r.sha256, sha256);
 }
@@ -83,7 +83,7 @@ async fn resolves_pinned_version() {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
             {
                 "id": "v1", "version_number": "0.111.0",
-                "game_versions": ["1.21.4"], "loaders": ["fabric"],
+                "game_versions": ["26.1.2"], "loaders": ["fabric"],
                 "files": [{
                     "url": format!("{}/files/v1.jar", server.uri()),
                     "filename": "f1.jar",
@@ -91,8 +91,8 @@ async fn resolves_pinned_version() {
                 }]
             },
             {
-                "id": "v2", "version_number": "0.110.0+1.21.4",
-                "game_versions": ["1.21.4"], "loaders": ["fabric"],
+                "id": "v2", "version_number": "0.140.0+26.1.2",
+                "game_versions": ["26.1.2"], "loaders": ["fabric"],
                 "files": [{
                     "url": file_v2_url,
                     "filename": "f2.jar",
@@ -105,7 +105,7 @@ async fn resolves_pinned_version() {
     mock_file(&server, "/files/v2.jar", jar_v2.clone()).await;
 
     let p = Modrinth::with_base(server.uri());
-    let r = p.resolve(&registry_spec("0.110.0+1.21.4"), &env()).await.unwrap();
+    let r = p.resolve(&registry_spec("0.140.0+26.1.2"), &env()).await.unwrap();
     assert_eq!(r.filename, "f2.jar");
     assert_eq!(r.sha256, mc_snap_core::cache::sha256_hex(&jar_v2));
 }
@@ -145,7 +145,7 @@ async fn detects_sha512_mismatch() {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
             {
                 "id": "abc", "version_number": "0.110.0",
-                "game_versions": ["1.21.4"], "loaders": ["fabric"],
+                "game_versions": ["26.1.2"], "loaders": ["fabric"],
                 "files": [{
                     "url": file_url, "filename": "x.jar",
                     "hashes": {"sha512": wrong_sha}, "primary": true

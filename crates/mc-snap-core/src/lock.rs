@@ -86,7 +86,7 @@ mod tests {
             yml_hash: "a".repeat(64),
             loader: LockLoader {
                 kind: "fabric".into(),
-                minecraft: "1.21.4".into(),
+                minecraft: "26.1.2".into(),
                 loader_version: Some("0.16.9".into()),
                 installer_version: Some("1.0.1".into()),
                 server_jar_url: "https://example.com/server.jar".into(),
