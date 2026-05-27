@@ -57,7 +57,15 @@ fn linux_jvm_dirs() -> Vec<&'static str> {
 }
 
 pub fn find_matching(required_major: u32) -> Option<JavaInstall> {
-    discover_all().into_iter().find(|i| i.major == required_major)
+    // Java is backward-compatible for server use; any JDK at or above the requested
+    // major will run. Prefer the lowest major that still satisfies the requirement
+    // so we don't pick an unrelated newer/experimental JDK if a matching one exists.
+    let mut candidates: Vec<JavaInstall> = discover_all()
+        .into_iter()
+        .filter(|i| i.major >= required_major)
+        .collect();
+    candidates.sort_by_key(|i| i.major);
+    candidates.into_iter().next()
 }
 
 pub fn probe_major(bin: &Path) -> Option<u32> {
@@ -97,12 +105,25 @@ pub async fn download_temurin(jdks_root: &Path, major: u32) -> anyhow::Result<Ja
     let url = format!(
         "https://api.adoptium.net/v3/binary/latest/{major}/ga/{os}/{arch}/{image_type}/hotspot/normal/eclipse"
     );
+    let checksum_url = format!(
+        "https://api.adoptium.net/v3/checksum/latest/{major}/ga/{os}/{arch}/{image_type}/hotspot/normal/eclipse"
+    );
     let target = jdks_root.join(major.to_string()).join(format!("{os}-{arch}"));
     std::fs::create_dir_all(&target)?;
 
     let client = reqwest::Client::builder()
         .user_agent(concat!("mc-snap/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .timeout(std::time::Duration::from_secs(300))
+        .connect_timeout(std::time::Duration::from_secs(15))
         .build()?;
+
+    // Fetch the published checksum first so we can verify the binary before we ever
+    // trust its contents (extract, scan paths, etc).
+    let want_sha256 = fetch_adoptium_sha256(&client, &checksum_url)
+        .await
+        .with_context(|| format!("fetching adoptium checksum from {checksum_url}"))?;
+
     let bytes = client
         .get(&url)
         .send()
@@ -111,6 +132,18 @@ pub async fn download_temurin(jdks_root: &Path, major: u32) -> anyhow::Result<Ja
         .context("adoptium download failed")?
         .bytes()
         .await?;
+
+    let got_sha256 = {
+        use sha2::Digest;
+        let mut h = sha2::Sha256::new();
+        h.update(&bytes);
+        hex::encode(h.finalize())
+    };
+    if got_sha256 != want_sha256 {
+        anyhow::bail!(
+            "adoptium jdk sha256 mismatch: published {want_sha256}, got {got_sha256}"
+        );
+    }
 
     let tmp = tempfile::NamedTempFile::new()?;
     std::fs::write(tmp.path(), &bytes)?;
@@ -122,6 +155,26 @@ pub async fn download_temurin(jdks_root: &Path, major: u32) -> anyhow::Result<Ja
         anyhow::bail!("extracted JDK has no bin/java at {}", bin.display());
     }
     Ok(JavaInstall { bin, major })
+}
+
+async fn fetch_adoptium_sha256(client: &reqwest::Client, url: &str) -> anyhow::Result<String> {
+    // The checksum endpoint redirects to a .sha256.txt file with body "<hex>  <filename>".
+    let body = client
+        .get(url)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    let hash = body
+        .split_whitespace()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("empty checksum response from {url}"))?
+        .to_lowercase();
+    if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        anyhow::bail!("malformed adoptium checksum: {hash:?}");
+    }
+    Ok(hash)
 }
 
 fn adoptium_target() -> anyhow::Result<(&'static str, &'static str, &'static str, &'static str)> {
@@ -163,13 +216,9 @@ fn java_binary_name() -> &'static str {
 
 fn extract_archive(archive: &Path, dest: &Path, ext: &str) -> anyhow::Result<()> {
     match ext {
-        "zip" => {
-            let f = std::fs::File::open(archive)?;
-            let mut zf = zip::ZipArchive::new(f)?;
-            zf.extract(dest)?;
-            Ok(())
-        }
+        "zip" => safe_extract_zip(archive, dest),
         "tar.gz" => {
+            // tar handles symlinks/permissions natively; restrict it to dest.
             let status = std::process::Command::new("tar")
                 .arg("-xzf")
                 .arg(archive)
@@ -184,6 +233,67 @@ fn extract_archive(archive: &Path, dest: &Path, ext: &str) -> anyhow::Result<()>
         }
         other => anyhow::bail!("unknown archive ext: {other}"),
     }
+}
+
+fn safe_extract_zip(archive: &Path, dest: &Path) -> anyhow::Result<()> {
+    use std::io::Read;
+    use std::path::Component;
+
+    let f = std::fs::File::open(archive)?;
+    let mut zf = zip::ZipArchive::new(f)?;
+    std::fs::create_dir_all(dest)?;
+    let dest_canon = dest.canonicalize().unwrap_or_else(|_| dest.to_path_buf());
+
+    for i in 0..zf.len() {
+        let mut entry = zf.by_index(i)?;
+        let name = entry
+            .enclosed_name()
+            .ok_or_else(|| anyhow::anyhow!("zip entry {i} has an unsafe name"))?;
+
+        if name.is_absolute() {
+            anyhow::bail!("zip entry has absolute path: {}", name.display());
+        }
+        for c in name.components() {
+            match c {
+                Component::Normal(_) | Component::CurDir => {}
+                _ => anyhow::bail!("zip entry has unsafe component: {}", name.display()),
+            }
+        }
+
+        // Refuse symlink entries — they could point outside the destination on extraction.
+        if entry.unix_mode().map(|m| m & 0o170000 == 0o120000).unwrap_or(false) {
+            anyhow::bail!("zip contains symlink entry: {}", name.display());
+        }
+
+        let out = dest_canon.join(&name);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&out)?;
+            continue;
+        }
+
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent)?;
+            let canon = parent
+                .canonicalize()
+                .with_context(|| format!("canonicalize {}", parent.display()))?;
+            if !canon.starts_with(&dest_canon) {
+                anyhow::bail!("zip entry would escape destination: {}", out.display());
+            }
+        }
+
+        let mut buf = Vec::with_capacity(entry.size() as usize);
+        entry.read_to_end(&mut buf)?;
+        std::fs::write(&out, &buf)?;
+
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+            // Preserve executable bits for bin/java etc.
+            let perm = std::fs::Permissions::from_mode(mode & 0o777);
+            std::fs::set_permissions(&out, perm)?;
+        }
+    }
+    Ok(())
 }
 
 fn flatten_jdk_root(dest: &Path) -> anyhow::Result<()> {

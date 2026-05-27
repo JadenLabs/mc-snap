@@ -22,3 +22,4 @@ tracing.workspace = true
 directories.workspace = true
 futures-util.workspace = true
 tempfile.workspace = true
+fs2.workspace = true

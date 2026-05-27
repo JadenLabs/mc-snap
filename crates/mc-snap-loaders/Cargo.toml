@@ -16,6 +16,8 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+sha1.workspace = true
+hex.workspace = true
 
 [dev-dependencies]
 wiremock.workspace = true

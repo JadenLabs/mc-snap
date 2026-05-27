@@ -27,33 +27,89 @@ pub fn snapshots_dir(layout: &ProjectLayout) -> PathBuf {
 }
 
 pub fn create(layout: &ProjectLayout, meta: SnapshotMeta) -> Result<Snapshot> {
+    validate_id(&meta.id)?;
     let base = snapshots_dir(layout);
     std::fs::create_dir_all(&base)?;
+    sweep_stale_staging(&base)?;
     let dir = base.join(&meta.id);
     if dir.exists() {
         anyhow::bail!("snapshot id already exists: {}", meta.id);
     }
-    std::fs::create_dir_all(&dir)?;
 
-    let yml = layout.yml();
-    if yml.is_file() {
-        std::fs::copy(&yml, dir.join("mc-snap.yml"))
-            .with_context(|| format!("copying {}", yml.display()))?;
+    // Stage the snapshot in a sibling directory and rename it into place once
+    // every file is present + meta.toml is written. A crash mid-build leaves
+    // a `.tmp-*` dir that the next call sweeps away rather than a half-snapshot
+    // that blocks future updates.
+    let staging = base.join(format!(".tmp-{}", meta.id));
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging).ok();
     }
-    let lock = layout.lock();
-    if lock.is_file() {
-        std::fs::copy(&lock, dir.join("mc-snap.lock"))
-            .with_context(|| format!("copying {}", lock.display()))?;
-    }
-    let configs = layout.configs_dir();
-    if configs.is_dir() {
-        copy_dir_recursive(&configs, &dir.join("configs"))?;
+    std::fs::create_dir_all(&staging)?;
+
+    let res = (|| -> Result<()> {
+        let yml = layout.yml();
+        if yml.is_file() {
+            std::fs::copy(&yml, staging.join("mc-snap.yml"))
+                .with_context(|| format!("copying {}", yml.display()))?;
+        }
+        let lock = layout.lock();
+        if lock.is_file() {
+            std::fs::copy(&lock, staging.join("mc-snap.lock"))
+                .with_context(|| format!("copying {}", lock.display()))?;
+        }
+        let configs = layout.configs_dir();
+        if configs.is_dir() {
+            copy_dir_recursive(&configs, &staging.join("configs"))?;
+        }
+        // meta.toml LAST — its presence is what makes the snapshot visible to list().
+        let meta_path = staging.join("meta.toml");
+        std::fs::write(&meta_path, toml::to_string_pretty(&meta)?)?;
+        Ok(())
+    })();
+
+    if let Err(e) = res {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(e);
     }
 
-    let meta_path = dir.join("meta.toml");
-    std::fs::write(&meta_path, toml::to_string_pretty(&meta)?)?;
+    std::fs::rename(&staging, &dir).with_context(|| {
+        format!("publishing snapshot {} -> {}", staging.display(), dir.display())
+    })?;
 
     Ok(Snapshot { dir, meta })
+}
+
+/// Refuse anything that could escape the snapshots directory or shadow our
+/// `.tmp-*` staging convention. `load()` and `restore()` both join this id
+/// onto a base path, so it has to be a single safe filename.
+fn validate_id(id: &str) -> Result<()> {
+    if id.is_empty() {
+        anyhow::bail!("snapshot id must not be empty");
+    }
+    if id.starts_with('.') {
+        anyhow::bail!("snapshot id must not start with '.'");
+    }
+    for c in id.chars() {
+        let ok = c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.';
+        if !ok {
+            anyhow::bail!("snapshot id has invalid character {c:?}: {id}");
+        }
+    }
+    Ok(())
+}
+
+fn sweep_stale_staging(base: &Path) -> Result<()> {
+    let Ok(rd) = std::fs::read_dir(base) else {
+        return Ok(());
+    };
+    for entry in rd.flatten() {
+        let name = entry.file_name();
+        let s = name.to_string_lossy();
+        if s.starts_with(".tmp-") {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+    Ok(())
 }
 
 pub fn list(layout: &ProjectLayout) -> Result<Vec<Snapshot>> {
@@ -82,6 +138,7 @@ pub fn list(layout: &ProjectLayout) -> Result<Vec<Snapshot>> {
 }
 
 pub fn load(layout: &ProjectLayout, id: &str) -> Result<Snapshot> {
+    validate_id(id)?;
     let dir = snapshots_dir(layout).join(id);
     let meta_path = dir.join("meta.toml");
     if !meta_path.is_file() {
@@ -121,11 +178,13 @@ pub fn restore(layout: &ProjectLayout, snap: &Snapshot) -> Result<()> {
 }
 
 pub fn new_id() -> String {
-    let secs = std::time::SystemTime::now()
+    let d = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    format!("snap-{secs}")
+        .unwrap_or_default();
+    // Include millis so two snapshots taken in the same second don't collide.
+    let secs = d.as_secs();
+    let millis = d.subsec_millis();
+    format!("snap-{secs}-{millis:03}")
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {

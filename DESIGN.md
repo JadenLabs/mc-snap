@@ -22,7 +22,7 @@
 - **Reproducibility first.** A `mc-snap.lock` pins exact versions + SHA-256 hashes for every download, like `Cargo.lock`. Two `mc-snap install` runs on the same lockfile produce byte-identical server directories.
 - **Trait-based extension points.** `ServerLoader` and `ModProvider` traits make it cheap to add Paper, Forge, Hangar, CurseForge later without touching core logic.
 - **Separation of declared vs generated.** The user owns `mc-snap.yml`, `mc-snap.lock`, and `configs/`. The tool owns `.mc-snap/` (cache, server runtime, pid, logs) and treats it as disposable.
-- **Content-addressed cache.** Jars are stored once per SHA-256 in `~/.mc-snap/cache/` and symlinked (or hardlinked on Windows) into each server's mods folder. Multiple servers sharing Sodium download it once.
+- **Content-addressed cache.** Jars are stored once per SHA-256 under the OS user-data dir (`~/.local/share/mc-snap/cache/` on Linux, `%APPDATA%\mc-snap\mc-snap\data\cache` on Windows) and symlinked (hardlinked on Windows) into each server's mods folder. Multiple servers sharing Sodium download it once.
 - **RCON for lifecycle, not stdin piping.** We auto-enable RCON in `server.properties` (unless the user opts out) and use it for `stop` and `console`. This avoids platform-specific stdin/pty wrangling.
 
 ## YAML schema
@@ -81,13 +81,17 @@ my-server/
 │   └── sodium-options.json
 └── .mc-snap/                # generated, gitignored
     ├── server/              # actual server root (server.jar, mods/, world/, logs/)
-    ├── cache/               # symlinks into the global content-addressed cache
+    ├── snapshots/           # pre-update yml + lock + configs, used by `revert`
     ├── state.json           # last-applied lockfile hash, install status
-    ├── pid                  # running server pid (absent when stopped)
-    └── rcon.secret          # auto-generated RCON password
+    ├── pid                  # running server pid + start-token (for pid-reuse detection)
+    ├── rcon.secret          # auto-generated RCON password (mode 0600 on Unix)
+    └── .lock                # advisory lock held by mutating commands (install/update/start/...)
 ```
 
-Global cache (shared across servers): `~/.mc-snap/{cache,jdks}/`.
+Global cache (shared across servers, resolved via `directories::ProjectDirs`):
+`~/.local/share/mc-snap/{cache,jdks}/` on Linux,
+`~/Library/Application Support/mc-snap/{cache,jdks}/` on macOS,
+`%APPDATA%\mc-snap\mc-snap\data\{cache,jdks}` on Windows.
 
 ## Crate layout
 
@@ -98,10 +102,12 @@ mc-snap/
 ├── Cargo.toml               # workspace
 └── crates/
     ├── mc-snap-cli/         # binary; clap subcommands; thin wrapper over core
-    ├── mc-snap-core/        # YAML parsing, lockfile, resolver, state machine
+    │   ├── orchestrate.rs   # install/materialize glue (resolver + downloader + properties writer)
+    │   └── compat.rs        # update/check version comparison + mod-compat queries
+    ├── mc-snap-core/        # YAML parsing, lockfile, snapshot, paths, state, content cache, advisory lock
     ├── mc-snap-providers/   # ModProvider trait + modrinth, url impls
     ├── mc-snap-loaders/     # ServerLoader trait + vanilla, fabric impls
-    └── mc-snap-runtime/     # Java discovery/download, process spawn, RCON client
+    └── mc-snap-runtime/     # Java discovery/download, process spawn + pid/start-token tracking, RCON client
 ```
 
 ## Core traits
@@ -132,25 +138,30 @@ Downloading is shared infrastructure in `mc-snap-core` - providers only resolve,
 
 | Command | Purpose |
 |---|---|
-| `mc-snap init` | Interactive scaffold of a new `mc-snap.yml` |
+| `mc-snap init [--non-interactive]` | Interactive scaffold of a new `mc-snap.yml`; `--non-interactive` writes the default template |
 | `mc-snap install` | Resolve, download, write `.mc-snap/server/`, update lockfile |
-| `mc-snap update [mod...]` | Refresh versions, rewrite lockfile (no install) |
+| `mc-snap update --to <ver> [--skip-missing] [--yes] [--loader <ver>]` | Snapshot, then update yml + lockfile to a new Minecraft version. Auto-rolls back on failure |
+| `mc-snap revert [<id>] [--list]` | Restore a snapshot (latest by default); `--list` shows them |
+| `mc-snap check --to <ver>` | Per-mod compatibility report (no filesystem changes) |
+| `mc-snap updatable [--to <ver>]` | Yes/no answer or "newest MC every mod supports" |
+| `mc-snap search` | Newer mod versions on the current MC |
 | `mc-snap start [--detach]` | Start server (foreground by default) |
 | `mc-snap stop` | Graceful stop via RCON `stop` |
-| `mc-snap restart` | `stop` then `start --detach` |
+| `mc-snap restart` | `stop` (with port-release wait) then `start --detach` |
 | `mc-snap status` | Running/stopped, uptime, player count (via RCON) |
 | `mc-snap logs [-f]` | Tail `.mc-snap/server/logs/latest.log` |
-| `mc-snap console` | Interactive RCON shell |
-| `mc-snap pack -o out.zip` | Source bundle: `mc-snap.yml` + `mc-snap.lock` + `configs/` (zip, not tarball) |
-| `mc-snap unpack <bundle.zip>` | Extract bundle into current dir |
+| `mc-snap console [cmd...]` | One-shot RCON command, or interactive shell with no args |
+| `mc-snap pack [-o out.zip]` | Source bundle: `mc-snap.yml` + `mc-snap.lock` + `configs/` (zip, not tarball) |
+| `mc-snap unpack <bundle.zip>` | Extract bundle into current dir (path-validated, no zip-slip) |
 | `mc-snap validate` | Schema check without network |
 | `mc-snap doctor` | Verify Java, network reachability, disk space |
 
 ## Process lifecycle
 
-- **Foreground (default):** parent process is the server. Ctrl-C → RCON `stop` → wait → exit.
-- **Detached (`--detach`):** double-fork on Unix / `CreateProcess` with `DETACHED_PROCESS` on Windows. Pid written to `.mc-snap/pid`.
-- **Stop:** RCON `stop` command, then poll the pid, SIGTERM after a grace window, SIGKILL as last resort.
+- **Foreground (default):** parent process is the server. The Java process inherits signals; Ctrl-C goes straight to it, and Minecraft's own handler shuts it down cleanly.
+- **Detached (`--detach`):** `setsid` on Unix, `DETACHED_PROCESS` on Windows. Pid + a per-OS start-token (process creation time on Windows, `/proc/<pid>/stat` field 22 on Linux) is written to `.mc-snap/pid` so we detect pid reuse after a crash or reboot.
+- **Stop:** RCON `stop` command, then poll the pid. On Unix, escalate to SIGTERM and then SIGKILL after grace windows. On Windows there is no SIGTERM equivalent, so we fall through directly to `TerminateProcess`.
+- **Restart:** `stop`, then probe the listening port until it's free (Windows releases the socket asynchronously after `TerminateProcess`), then `start --detach`.
 - **Logs:** Minecraft already writes `logs/latest.log`. `mc-snap logs` is a tail wrapper, not a re-implementation.
 
 ## Java management (hybrid)
@@ -204,12 +215,20 @@ The 26.x series is the current default. Concretely, supporting it meant:
 - **Bundles.** `pack` writes a `.zip` (DEFLATE) of `mc-snap.yml` + `mc-snap.lock` + `configs/`, no jars. `unpack` extracts it into the current directory.
 - **Windows cache linking.** Symlink on Unix, hardlink on Windows (no admin requirement).
 
+## Security model
+
+- **No unpinned downloads.** Every artifact is hashed. URL mods require a user-supplied `sha256`. Modrinth files are verified against the API's published `sha512` before they hit the cache; the lockfile sha256 is computed from the same verified bytes. The Mojang server jar is verified against the manifest's `sha1`. The Adoptium JDK download is verified against the published sha256 fetched from `/v3/checksum/latest/...` before extraction.
+- **Atomic writes.** Cache files, lockfile, yml, snapshots, and pid file are all written via tmp+rename so a crash mid-write can't leave a half-formed file the next run trips over.
+- **Zip extraction is path-validated.** `unpack` and the JDK extractor both walk archive entries by hand, rejecting absolute paths, `..` components, and symlink entries; output paths are canonicalized and asserted to stay under the destination.
+- **RCON secret hygiene.** 32 bytes from `OsRng`, hex-encoded. Written 0600 on Unix. `rcon.ip` is force-set to `127.0.0.1` on every install — the password is plaintext on the wire so we never let it listen externally.
+- **Project advisory lock.** A `fs2` exclusive lock on `.mc-snap/.lock` serializes mutating commands (install / update / start / stop / revert) so two runs can't stomp each other's yml + server dir.
+- **Download caps.** The reqwest client has bounded redirects (5) and total/connect timeouts. Streamed downloads abort if they exceed a hard size cap.
+
 ## Future scope
 
 - Plugin/datapack support for Fabric (`datapacks:`, `resourcepacks:` keys).
 - Additional loaders: Paper, Forge, NeoForge.
 - Additional providers: Hangar, CurseForge.
-- `update` command to refresh lockfile versions without re-installing.
 
 ## Verification
 

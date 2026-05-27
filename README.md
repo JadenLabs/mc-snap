@@ -8,7 +8,7 @@ Think "docker-compose for Minecraft servers".
 
 Working: Vanilla and Fabric loaders, Modrinth and direct-URL mod providers, install / start / stop / status / logs / console / pack / unpack / validate / doctor / check / updatable / search / update / revert, system Java discovery with Adoptium Temurin auto-download fallback, content-addressed jar cache, RCON-based lifecycle, source bundles, snapshot-based version updates.
 
-Tracks the Minecraft 26.x series; default scaffold pins 26.1.2 + Java 26. Tested on Linux with system Java 26. Windows hardlink path exists but is untested.
+Tracks the Minecraft 26.x series; default scaffold pins 26.1.2 + Java 26. Tested on Linux with system Java 26. Windows process management and the hardlink-based cache are implemented but not CI-tested.
 
 ## Install
 
@@ -17,6 +17,14 @@ git clone <repo> mc-snap
 cd mc-snap
 cargo build --release
 # binary lives at target/release/mc-snap
+```
+
+Or use the helper script, which runs `cargo install` into either your user or system prefix:
+
+```bash
+./scripts/install.sh            # installs to ~/.cargo/bin
+./scripts/install.sh --system   # installs to /usr/local/bin (needs sudo)
+./scripts/install.sh --debug    # build in debug mode for faster iteration
 ```
 
 Requires a system `java` (any version) for the doctor probe. Minecraft 26.x needs Java 26 at runtime; if your system Java is older, mc-snap auto-downloads Temurin 26 into `~/.local/share/mc-snap/jdks/`.
@@ -31,9 +39,9 @@ mc-snap start --detach         # starts the server in the background
 mc-snap console list           # send `list` via RCON
 mc-snap stop                   # graceful shutdown via RCON
 
-mc-snap pack -o my-server.zip  # share with friends
+mc-snap pack                   # writes mc-snap-bundle.zip (or pass -o to choose)
 # elsewhere:
-mc-snap unpack my-server.zip
+mc-snap unpack mc-snap-bundle.zip
 mc-snap install                # reproduces byte-identical setup
 ```
 
@@ -74,7 +82,7 @@ config:
 
 | Command | Purpose |
 |---|---|
-| `mc-snap init` | Interactive scaffold of a new `mc-snap.yml` |
+| `mc-snap init [--non-interactive]` | Interactive scaffold of a new `mc-snap.yml`; `--non-interactive` writes the default template without prompts |
 | `mc-snap validate` | Schema check, no network |
 | `mc-snap doctor` | Report discovered Java installs and cache paths |
 | `mc-snap install` | Resolve, download, materialize `.mc-snap/server/`, write lockfile |
@@ -105,16 +113,23 @@ my-server/
     ├── server/        # actual Minecraft server root
     ├── snapshots/     # pre-update snapshots of yml + lock + configs (for `revert`)
     ├── state.json     # last-applied lockfile hash
-    ├── pid            # present when running
-    └── rcon.secret    # auto-generated RCON password
+    ├── pid            # present when running (pid + start-token, for reuse detection)
+    ├── rcon.secret    # auto-generated RCON password (0600 on Unix)
+    └── .lock          # advisory lock held by mutating commands
 ```
 
-Global cache shared across servers: `~/.local/share/mc-snap/{cache,jdks}/`.
+`.gitignore` should include `/.mc-snap/` (the `init` command appends this automatically).
+
+Global cache shared across servers: `~/.local/share/mc-snap/{cache,jdks}/` on Linux, `~/Library/Application Support/mc-snap/` on macOS, `%APPDATA%\mc-snap\mc-snap\data` on Windows.
+
+## RCON
+
+`install` auto-generates a 256-bit RCON password in `.mc-snap/rcon.secret` (mode 0600 on Unix) and writes `enable-rcon=true`, `rcon.password=<secret>`, and `rcon.ip=127.0.0.1` into `server.properties`. `stop`, `status`, and `console` all use this. RCON is plaintext, so we always bind it to loopback — the `rcon.ip` override in your yml is overwritten on every install for that reason.
 
 ## Development
 
 ```bash
-make build       # cargo build
+make build       # cargo build (debug — use `cargo build --release` for an optimized binary)
 make unit        # cargo test --workspace (unit + wiremock integration)
 make e2e         # full lifecycle against a real Fabric server in .dev-servers/
 make all         # unit + e2e

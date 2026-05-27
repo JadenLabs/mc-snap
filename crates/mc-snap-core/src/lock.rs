@@ -62,7 +62,11 @@ impl Lock {
 
     pub fn write(&self, p: &Path) -> anyhow::Result<()> {
         let s = toml::to_string_pretty(self)?;
-        std::fs::write(p, s)?;
+        // Write atomically via tmp+rename so a crash mid-write can't leave a
+        // truncated lockfile that subsequent runs fail to parse.
+        let tmp = p.with_extension("lock.tmp");
+        std::fs::write(&tmp, s)?;
+        std::fs::rename(&tmp, p)?;
         Ok(())
     }
 

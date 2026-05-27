@@ -131,10 +131,21 @@ fn write_properties(server_dir: &Path, snap: &Snap, layout: &ProjectLayout) -> R
 
     let mut overrides = snap.config.server_properties.clone();
     overrides.insert("enable-rcon".into(), serde_yml::Value::Bool(true));
-    overrides.insert("rcon.password".into(), serde_yml::Value::String(password));
+    overrides.insert(
+        "rcon.password".into(),
+        serde_yml::Value::String(password),
+    );
+    // Force RCON to bind to loopback regardless of what the user puts in their
+    // yml — Minecraft RCON is plaintext, so the password leaks if it listens
+    // externally. If a user genuinely needs remote admin they should tunnel.
+    overrides.insert(
+        "rcon.ip".into(),
+        serde_yml::Value::String("127.0.0.1".into()),
+    );
 
-    let body = crate::props::render(crate::props::default_properties(), &overrides);
-    std::fs::write(server_dir.join("server.properties"), body)?;
+    let body = crate::props::render(crate::props::default_properties(), &overrides)?;
+    let out_path = server_dir.join("server.properties");
+    write_sensitive(&out_path, body.as_bytes())?;
     Ok(())
 }
 
@@ -149,20 +160,33 @@ fn ensure_rcon_secret(path: &Path) -> Result<String> {
         std::fs::create_dir_all(parent)?;
     }
     let secret = random_secret();
-    std::fs::write(path, &secret)?;
+    write_sensitive(path, secret.as_bytes())?;
     Ok(secret)
 }
 
+/// 32 bytes of OS entropy, hex-encoded → 64 hex chars / 256 bits.
 fn random_secret() -> String {
-    let seed = format!(
-        "{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    );
-    mc_snap_core::cache::sha256_hex(seed.as_bytes())[..32].to_string()
+    use rand::RngCore;
+    let mut buf = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut buf);
+    hex::encode(buf)
+}
+
+/// Write `bytes` to `path`, then on Unix lock the file down to mode 0600 so other
+/// users on the box can't read the RCON password.
+fn write_sensitive(path: &Path, bytes: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, bytes)
+        .with_context(|| format!("writing {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("chmod 0600 {}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn copy_config_files(layout: &ProjectLayout, snap: &Snap, server_dir: &Path) -> Result<()> {

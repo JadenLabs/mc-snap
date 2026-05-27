@@ -26,17 +26,63 @@ pub fn spawn_detached(mut cmd: Command, pid_file: &Path) -> Result<u32> {
     }
     let child = cmd.spawn().context("spawning detached server")?;
     let pid = child.id().ok_or_else(|| anyhow::anyhow!("no pid"))?;
-    std::fs::write(pid_file, pid.to_string())?;
+    write_pid_record(pid_file, pid)?;
     Ok(pid)
+}
+
+/// On-disk pid file format: `<pid>\n<start_token>`. The token is best-effort
+/// per-OS — process start time on Windows (where pids recycle aggressively),
+/// boot time on Unix (so a reboot invalidates the file). If we can't read a
+/// token on this OS we fall through to plain pid-check, which matches the
+/// previous behaviour.
+fn write_pid_record(pid_file: &Path, pid: u32) -> Result<()> {
+    let token = process_token(pid).unwrap_or_default();
+    let body = if token.is_empty() {
+        pid.to_string()
+    } else {
+        format!("{pid}\n{token}")
+    };
+    // Write to a temp sibling and rename so a crash mid-write can't leave a
+    // half-written pid file that we then mis-parse.
+    let tmp = pid_file.with_extension("tmp");
+    std::fs::write(&tmp, body)?;
+    std::fs::rename(&tmp, pid_file)?;
+    Ok(())
 }
 
 pub fn read_pid(pid_file: &Path) -> Option<u32> {
     let s = std::fs::read_to_string(pid_file).ok()?;
-    s.trim().parse().ok()
+    s.lines().next()?.trim().parse().ok()
+}
+
+fn read_token(pid_file: &Path) -> Option<String> {
+    let s = std::fs::read_to_string(pid_file).ok()?;
+    let mut it = s.lines();
+    it.next()?; // pid
+    it.next().map(|l| l.trim().to_string()).filter(|s| !s.is_empty())
 }
 
 pub fn clear_pid(pid_file: &Path) {
     std::fs::remove_file(pid_file).ok();
+}
+
+/// True iff the process is alive AND (on systems where we record a start token)
+/// the token still matches — defends against pid reuse after a crash/reboot.
+pub fn is_running_recorded(pid_file: &Path, pid: u32) -> bool {
+    if !is_running(pid) {
+        return false;
+    }
+    let saved = read_token(pid_file);
+    let current = process_token(pid);
+    match (saved, current) {
+        (Some(a), Some(b)) => a == b,
+        // No token recorded (legacy pid file, or platform without a usable token):
+        // fall back to plain alive-check.
+        (None, _) => true,
+        // We have a saved token but the OS won't give us a current one — be safe and
+        // assume identity matches (the process is at least alive).
+        (Some(_), None) => true,
+    }
 }
 
 #[cfg(unix)]
@@ -70,6 +116,61 @@ pub fn is_running(pid: u32) -> bool {
 #[cfg(not(any(unix, windows)))]
 pub fn is_running(_pid: u32) -> bool {
     false
+}
+
+/// A short per-process identity token used to detect pid reuse. None means we
+/// can't compute one on this OS (caller falls back to plain alive-check).
+#[cfg(windows)]
+fn process_token(pid: u32) -> Option<String> {
+    extern "system" {
+        fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> isize;
+        fn CloseHandle(hObject: isize) -> i32;
+        fn GetProcessTimes(
+            hProcess: isize,
+            lpCreationTime: *mut FILETIME,
+            lpExitTime: *mut FILETIME,
+            lpKernelTime: *mut FILETIME,
+            lpUserTime: *mut FILETIME,
+        ) -> i32;
+    }
+    #[repr(C)]
+    #[derive(Default, Copy, Clone)]
+    struct FILETIME {
+        low: u32,
+        high: u32,
+    }
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle == 0 {
+            return None;
+        }
+        let mut creation = FILETIME::default();
+        let mut exit = FILETIME::default();
+        let mut kernel = FILETIME::default();
+        let mut user = FILETIME::default();
+        let ok = GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user);
+        CloseHandle(handle);
+        if ok == 0 {
+            return None;
+        }
+        Some(format!("{}-{}", creation.high, creation.low))
+    }
+}
+
+#[cfg(unix)]
+fn process_token(pid: u32) -> Option<String> {
+    // Parse start time (field 22) from /proc/<pid>/stat where available. The
+    // comm field can contain spaces and parens, so split on the LAST ')'.
+    let content = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_comm = content.rsplit_once(')')?.1;
+    let starttime = after_comm.split_whitespace().nth(19)?;
+    Some(starttime.to_string())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn process_token(_pid: u32) -> Option<String> {
+    None
 }
 
 #[cfg(unix)]

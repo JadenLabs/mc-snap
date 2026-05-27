@@ -49,6 +49,9 @@ impl ProjectLayout {
     pub fn rcon_secret(&self) -> PathBuf {
         self.snap_dir().join("rcon.secret")
     }
+    pub fn lock_file(&self) -> PathBuf {
+        self.snap_dir().join(".lock")
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -1,12 +1,14 @@
 use crate::orchestrate;
 use anyhow::Result;
 use mc_snap_core::paths::ProjectLayout;
+use mc_snap_core::proclock::ProjectLock;
 use mc_snap_core::snapshot;
 use mc_snap_core::yml::Snap;
 use mc_snap_runtime::process;
 
 pub async fn run(id: Option<String>, list: bool) -> Result<()> {
     let layout = ProjectLayout::discover(&std::env::current_dir()?)?;
+    std::fs::create_dir_all(layout.snap_dir())?;
 
     if list {
         let all = snapshot::list(&layout)?;
@@ -31,8 +33,10 @@ pub async fn run(id: Option<String>, list: bool) -> Result<()> {
         return Ok(());
     }
 
+    let _guard = ProjectLock::acquire(&layout.lock_file())?;
+
     if let Some(pid) = process::read_pid(&layout.pid_file()) {
-        if process::is_running(pid) {
+        if process::is_running_recorded(&layout.pid_file(), pid) {
             anyhow::bail!(
                 "server is running (pid {pid}); stop it with `mc-snap stop` before reverting"
             );

@@ -179,26 +179,52 @@ fn collect_newer(versions: &[AvailableVersion], locked: &str) -> Vec<String> {
 }
 
 /// Compare two dot-separated numeric version strings (e.g. "26.1.10" vs "26.1.2").
-/// Non-numeric segments fall back to lexical compare. Missing segments treated as 0.
+/// Pre-release suffixes like `-rc.1`, `-pre1`, `-beta` are split off and treated
+/// as LOWER than the bare release per semver convention. Missing segments are 0.
 pub fn compare_mc_version(a: &str, b: &str) -> std::cmp::Ordering {
-    let parts_a: Vec<&str> = a.split('.').collect();
-    let parts_b: Vec<&str> = b.split('.').collect();
+    use std::cmp::Ordering;
+
+    let (core_a, pre_a) = split_pre_release(a);
+    let (core_b, pre_b) = split_pre_release(b);
+
+    let parts_a: Vec<&str> = core_a.split('.').collect();
+    let parts_b: Vec<&str> = core_b.split('.').collect();
     let n = parts_a.len().max(parts_b.len());
     for i in 0..n {
         let pa = parts_a.get(i).copied().unwrap_or("0");
         let pb = parts_b.get(i).copied().unwrap_or("0");
         match (pa.parse::<u64>(), pb.parse::<u64>()) {
             (Ok(x), Ok(y)) => match x.cmp(&y) {
-                std::cmp::Ordering::Equal => continue,
+                Ordering::Equal => continue,
                 o => return o,
             },
             _ => match pa.cmp(pb) {
-                std::cmp::Ordering::Equal => continue,
+                Ordering::Equal => continue,
                 o => return o,
             },
         }
     }
-    std::cmp::Ordering::Equal
+
+    // Cores equal — fall back to pre-release comparison. A version with NO
+    // pre-release outranks one that has one (1.0 > 1.0-rc).
+    match (pre_a, pre_b) {
+        (None, None) => Ordering::Equal,
+        (None, Some(_)) => Ordering::Greater,
+        (Some(_), None) => Ordering::Less,
+        (Some(x), Some(y)) => x.cmp(&y),
+    }
+}
+
+/// Split "26.1.0-rc.1" into ("26.1.0", Some("rc.1")). Mojang's snapshots use
+/// "1.20-pre1" style and we accept either separator. We don't strip "+build"
+/// metadata because Modrinth versions like "0.140.0+26.1.2" carry MC-version
+/// info there and we want that to participate in ordering.
+fn split_pre_release(s: &str) -> (&str, Option<&str>) {
+    if let Some(idx) = s.find('-') {
+        (&s[..idx], Some(&s[idx + 1..]))
+    } else {
+        (s, None)
+    }
 }
 
 #[cfg(test)]
@@ -217,6 +243,22 @@ mod tests {
         );
         assert_eq!(
             compare_mc_version("26.1", "26.1.2"),
+            std::cmp::Ordering::Less
+        );
+    }
+
+    #[test]
+    fn release_outranks_pre_release() {
+        assert_eq!(
+            compare_mc_version("26.1.0", "26.1.0-rc.1"),
+            std::cmp::Ordering::Greater
+        );
+        assert_eq!(
+            compare_mc_version("26.1.0-rc.1", "26.1.0"),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            compare_mc_version("26.1.0-rc.1", "26.1.0-rc.2"),
             std::cmp::Ordering::Less
         );
     }

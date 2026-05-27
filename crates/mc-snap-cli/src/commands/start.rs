@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use mc_snap_core::lock::Lock;
 use mc_snap_core::paths::{GlobalDirs, ProjectLayout};
+use mc_snap_core::proclock::ProjectLock;
 use mc_snap_core::{LaunchCtx, LoaderSpec};
 use mc_snap_core::yml::Snap;
 use mc_snap_runtime::{java, process};
@@ -8,12 +9,14 @@ use tracing::info;
 
 pub async fn run(detach: bool) -> Result<()> {
     let layout = ProjectLayout::discover(&std::env::current_dir()?)?;
+    std::fs::create_dir_all(layout.snap_dir())?;
+    let _guard = ProjectLock::acquire(&layout.lock_file())?;
     let snap = Snap::from_path(&layout.yml())?;
     let lock = Lock::from_path(&layout.lock())
         .context("no mc-snap.lock found; run `mc-snap install` first")?;
 
     if let Some(pid) = process::read_pid(&layout.pid_file()) {
-        if process::is_running(pid) {
+        if process::is_running_recorded(&layout.pid_file(), pid) {
             anyhow::bail!("server already running (pid {pid})");
         }
         process::clear_pid(&layout.pid_file());

@@ -2,8 +2,15 @@ use mc_snap_core::yml::Loader;
 use mc_snap_core::{LoaderSpec, ServerLoader};
 use mc_snap_loaders::vanilla::Vanilla;
 use serde_json::json;
+use sha1::{Digest, Sha1};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+fn sha1_hex(bytes: &[u8]) -> String {
+    let mut h = Sha1::new();
+    h.update(bytes);
+    hex::encode(h.finalize())
+}
 
 fn spec() -> LoaderSpec {
     LoaderSpec(Loader { kind: "vanilla".into(), version: None, installer: None })
@@ -14,6 +21,7 @@ async fn resolves_known_version() {
     let server = MockServer::start().await;
 
     let jar_bytes = b"FAKE_SERVER_JAR_CONTENT".to_vec();
+    let jar_sha1 = sha1_hex(&jar_bytes);
 
     Mock::given(method("GET"))
         .and(path("/manifest"))
@@ -32,7 +40,7 @@ async fn resolves_known_version() {
             "downloads": {
                 "server": {
                     "url": format!("{}/server.jar", server.uri()),
-                    "sha1": "abc",
+                    "sha1": jar_sha1,
                     "size": jar_bytes.len()
                 }
             }

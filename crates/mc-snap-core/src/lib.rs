@@ -2,6 +2,7 @@ pub mod cache;
 pub mod download;
 pub mod lock;
 pub mod paths;
+pub mod proclock;
 pub mod state;
 pub mod traits;
 pub mod yml;

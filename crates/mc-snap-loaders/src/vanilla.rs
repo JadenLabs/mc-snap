@@ -1,8 +1,15 @@
 use async_trait::async_trait;
 use mc_snap_core::{LaunchCtx, LoaderSpec, ResolvedLoader, ServerLoader};
 use serde::Deserialize;
+use sha1::{Digest, Sha1};
 use std::path::Path;
 use tokio::process::Command;
+
+fn sha1_hex(bytes: &[u8]) -> String {
+    let mut h = Sha1::new();
+    h.update(bytes);
+    hex::encode(h.finalize())
+}
 
 const MANIFEST: &str = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json";
 
@@ -60,7 +67,6 @@ struct Downloads {
 #[derive(Debug, Deserialize)]
 struct ServerDownload {
     url: String,
-    #[allow(dead_code)]
     sha1: String,
     #[allow(dead_code)]
     size: u64,
@@ -103,6 +109,17 @@ impl ServerLoader for Vanilla {
             .error_for_status()?
             .bytes()
             .await?;
+        // Verify Mojang's published sha1 before we trust the bytes. Without this the
+        // lockfile's sha256 is just "the hash of whatever the server returned", which
+        // proves nothing.
+        let want_sha1 = meta.downloads.server.sha1.trim().to_lowercase();
+        let got_sha1 = sha1_hex(&bytes);
+        if got_sha1 != want_sha1 {
+            anyhow::bail!(
+                "vanilla server jar sha1 mismatch for {}: manifest says {}, got {}",
+                minecraft, want_sha1, got_sha1
+            );
+        }
         let sha256 = mc_snap_core::cache::sha256_hex(&bytes);
 
         Ok(ResolvedLoader {

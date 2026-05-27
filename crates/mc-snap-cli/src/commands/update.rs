@@ -3,11 +3,12 @@ use crate::orchestrate;
 use anyhow::{Context, Result};
 use mc_snap_core::lock::Lock;
 use mc_snap_core::paths::ProjectLayout;
+use mc_snap_core::proclock::ProjectLock;
 use mc_snap_core::snapshot::{self, SnapshotMeta};
 use mc_snap_core::yml::{ModEntry, Snap};
 use mc_snap_runtime::process;
 use std::collections::HashSet;
-use std::io::{BufRead, Write};
+use std::io::{BufRead, IsTerminal, Write};
 
 pub async fn run(
     target_mc: &str,
@@ -16,10 +17,12 @@ pub async fn run(
     loader_version: Option<String>,
 ) -> Result<()> {
     let layout = ProjectLayout::discover(&std::env::current_dir()?)?;
+    std::fs::create_dir_all(layout.snap_dir())?;
+    let _guard = ProjectLock::acquire(&layout.lock_file())?;
     let snap = Snap::from_path(&layout.yml())?;
 
     if let Some(pid) = process::read_pid(&layout.pid_file()) {
-        if process::is_running(pid) {
+        if process::is_running_recorded(&layout.pid_file(), pid) {
             anyhow::bail!("server is running (pid {pid}); stop it with `mc-snap stop` before updating");
         }
     }
@@ -70,6 +73,14 @@ pub async fn run(
                 "{} mod(s) lack a {target_mc} version: {}. Re-run with --skip-missing to drop them.",
                 skipped.len(),
                 skipped.join(", ")
+            );
+        } else if !std::io::stdin().is_terminal() {
+            // Refuse to hang on a piped/non-interactive invocation. Force the user
+            // to declare intent explicitly with --skip-missing or --yes.
+            anyhow::bail!(
+                "{} mod(s) lack a {target_mc} version and stdin is not a terminal; \
+                 re-run with --skip-missing to drop them or --yes to cancel non-interactively",
+                skipped.len()
             );
         } else {
             print!(
@@ -131,17 +142,41 @@ pub async fn run(
     let snap_dir = snapshot::create(&layout, meta.clone())?;
     println!("snapshot saved: {}", snap_dir.meta.id);
 
-    // Persist the new yml + lock.
-    let new_yml_text = serde_yml::to_string(&new_snap)
-        .context("serializing updated mc-snap.yml")?;
-    std::fs::write(layout.yml(), new_yml_text)?;
-    new_lock.write(&layout.lock())?;
+    // Everything from this point is potentially destructive. If anything fails we
+    // auto-restore from the snapshot we just took so the user isn't left with
+    // half-written yml/lock + a partial server dir.
+    let apply = async {
+        let new_yml_text = serde_yml::to_string(&new_snap)
+            .context("serializing updated mc-snap.yml")?;
+        write_atomic(&layout.yml(), new_yml_text.as_bytes())?;
+        new_lock.write(&layout.lock())?;
 
-    // Clean stale mods + launch jar, then materialize.
-    if layout.server_dir().is_dir() {
-        clean_with_old_lock_aware(&layout, &new_lock)?;
+        if layout.server_dir().is_dir() {
+            clean_with_old_lock_aware(&layout, &new_lock)?;
+        }
+        orchestrate::materialize(&layout, &new_snap, &new_lock).await?;
+        Result::<()>::Ok(())
     }
-    orchestrate::materialize(&layout, &new_snap, &new_lock).await?;
+    .await;
+
+    if let Err(e) = apply {
+        eprintln!("update failed: {e:#}");
+        eprintln!("rolling back to snapshot {}...", snap_dir.meta.id);
+        if let Err(re) = snapshot::restore(&layout, &snap_dir) {
+            anyhow::bail!(
+                "update failed AND rollback failed: original={e:#}; rollback={re:#}. Manual recovery: snapshot is at {}",
+                snap_dir.dir.display()
+            );
+        }
+        // Try to leave the server dir consistent with the restored lock.
+        if let Ok(restored_lock) = mc_snap_core::lock::Lock::from_path(&layout.lock()) {
+            let _ = orchestrate::clean_stale_artifacts(&layout, &restored_lock);
+            if let Ok(restored_snap) = Snap::from_path(&layout.yml()) {
+                let _ = orchestrate::materialize(&layout, &restored_snap, &restored_lock).await;
+            }
+        }
+        return Err(e.context("update failed; rolled back via snapshot"));
+    }
 
     println!(
         "updated {} from {} to {} ({} mods, {} skipped). revert with `mc-snap revert {}`",
@@ -152,6 +187,14 @@ pub async fn run(
         skipped.len(),
         snap_dir.meta.id
     );
+    Ok(())
+}
+
+fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    let tmp = path.with_extension("yml.tmp");
+    std::fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("renaming {} -> {}", tmp.display(), path.display()))?;
     Ok(())
 }
 

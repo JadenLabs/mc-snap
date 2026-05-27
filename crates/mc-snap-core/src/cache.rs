@@ -25,8 +25,18 @@ impl ContentCache {
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&p, bytes)?;
-        Ok(p)
+        // Write to a sibling temp file then rename so an interrupted run can't leave a
+        // truncated file at the canonical path.
+        let tmp = p.with_extension(format!("tmp.{}", std::process::id()));
+        std::fs::write(&tmp, bytes)
+            .with_context(|| format!("writing {}", tmp.display()))?;
+        match std::fs::rename(&tmp, &p) {
+            Ok(()) => Ok(p),
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                Err(e).with_context(|| format!("renaming into cache {}", p.display()))
+            }
+        }
     }
 
     pub fn link_into(&self, sha256: &str, dst: &Path) -> anyhow::Result<()> {

@@ -23,6 +23,8 @@ tracing-subscriber.workspace = true
 serde_yml.workspace = true
 zip.workspace = true
 inquire.workspace = true
+rand.workspace = true
+hex.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
