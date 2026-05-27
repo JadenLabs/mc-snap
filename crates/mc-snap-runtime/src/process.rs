@@ -46,7 +46,28 @@ pub fn is_running(pid: u32) -> bool {
     kill(Pid::from_raw(pid as i32), None).is_ok()
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn is_running(pid: u32) -> bool {
+    extern "system" {
+        fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> isize;
+        fn CloseHandle(hObject: isize) -> i32;
+        fn GetExitCodeProcess(hProcess: isize, lpExitCode: *mut u32) -> i32;
+    }
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const STILL_ACTIVE: u32 = 259;
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle == 0 {
+            return false;
+        }
+        let mut exit_code: u32 = 0;
+        let ok = GetExitCodeProcess(handle, &mut exit_code);
+        CloseHandle(handle);
+        ok != 0 && exit_code == STILL_ACTIVE
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn is_running(_pid: u32) -> bool {
     false
 }
@@ -67,12 +88,35 @@ pub fn signal_kill(pid: u32) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+pub fn signal_term(pid: u32) -> Result<()> {
+    // Windows has no SIGTERM equivalent; escalate directly to terminate.
+    signal_kill(pid)
+}
+
+#[cfg(windows)]
+pub fn signal_kill(pid: u32) -> Result<()> {
+    extern "system" {
+        fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> isize;
+        fn TerminateProcess(hProcess: isize, uExitCode: u32) -> i32;
+        fn CloseHandle(hObject: isize) -> i32;
+    }
+    const PROCESS_TERMINATE: u32 = 0x0001;
+    unsafe {
+        let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        anyhow::ensure!(handle != 0, "OpenProcess failed for pid {pid}");
+        TerminateProcess(handle, 1);
+        CloseHandle(handle);
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
 pub fn signal_term(_pid: u32) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub fn signal_kill(_pid: u32) -> Result<()> {
     Ok(())
 }
