@@ -6,7 +6,7 @@ build:
 test: unit
 
 unit:
-	cargo test --workspace
+	cargo test --all-targets
 
 e2e: build
 	./scripts/e2e.sh
@@ -17,7 +17,7 @@ fmt:
 	cargo fmt --all
 
 clippy:
-	cargo clippy --workspace --all-targets -- -D warnings
+	cargo clippy --all-targets -- -D warnings
 
 clean:
 	cargo clean

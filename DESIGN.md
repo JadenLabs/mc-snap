@@ -95,25 +95,28 @@ Global cache (shared across servers, resolved via `directories::ProjectDirs`):
 
 ## Crate layout
 
-Cargo workspace, modules split by concern. Workspace (not single-crate) because trait-based extension points are central and clean crate boundaries enforce them.
+Single crate (`mc-snap`) with both a `[[bin]]` and `[lib]`. Modules are split by concern; the library surface exists so the wiremock integration tests in `tests/` can drive provider/loader code paths directly. Trait-based extension points (`ServerLoader`, `ModProvider`) keep the boundaries explicit even without separate crates.
 
 ```
 mc-snap/
-├── Cargo.toml               # workspace
-└── crates/
-    ├── mc-snap-cli/         # binary; clap subcommands; thin wrapper over core
-    │   ├── orchestrate.rs   # install/materialize glue (resolver + downloader + properties writer)
-    │   └── compat.rs        # update/check version comparison + mod-compat queries
-    ├── mc-snap-core/        # YAML parsing, lockfile, snapshot, paths, state, content cache, advisory lock
-    ├── mc-snap-providers/   # ModProvider trait + modrinth, url impls
-    ├── mc-snap-loaders/     # ServerLoader trait + vanilla, fabric impls
-    └── mc-snap-runtime/     # Java discovery/download, process spawn + pid/start-token tracking, RCON client
+├── Cargo.toml
+└── src/
+    ├── main.rs              # binary entry; clap subcommands
+    ├── lib.rs               # re-exports the modules below for tests + docs
+    ├── commands/            # one file per CLI subcommand
+    ├── orchestrate.rs       # install/materialize glue (resolver + downloader + properties writer)
+    ├── compat.rs            # update/check version comparison + mod-compat queries
+    ├── props.rs             # server.properties renderer with key/value validation
+    ├── yml.rs lock.rs cache.rs download.rs paths.rs proclock.rs snapshot.rs state.rs traits.rs
+    ├── providers/           # ModProvider trait + modrinth, url impls
+    ├── loaders/             # ServerLoader trait + vanilla, fabric impls
+    └── runtime/             # Java discovery/download, process spawn + pid/start-token tracking, RCON client
 ```
 
 ## Core traits
 
 ```rust
-// crates/mc-snap-loaders/src/lib.rs
+// src/loaders/mod.rs
 #[async_trait]
 pub trait ServerLoader: Send + Sync {
     fn id(&self) -> &'static str;                       // "fabric", "vanilla"
@@ -123,7 +126,7 @@ pub trait ServerLoader: Send + Sync {
     fn launch_command(&self, ctx: &LaunchCtx) -> Command;
 }
 
-// crates/mc-snap-providers/src/lib.rs
+// src/providers/mod.rs
 #[async_trait]
 pub trait ModProvider: Send + Sync {
     fn id(&self) -> &'static str;                       // "modrinth", "url"
@@ -132,7 +135,7 @@ pub trait ModProvider: Send + Sync {
 }
 ```
 
-Downloading is shared infrastructure in `mc-snap-core` - providers only resolve, the core fetches with retry/verify/cache.
+Downloading is shared infrastructure in the `download` module - providers only resolve, the core fetches with retry/verify/cache.
 
 ## Commands
 
@@ -235,5 +238,5 @@ The 26.x series is the current default. Concretely, supporting it meant:
 What ships in the repo:
 
 1. **Unit tests** colocated with each crate - schema parsing, lockfile round-trip, RCON framing, Java version parsing.
-2. **Wiremock integration tests** in `crates/mc-snap-providers/tests/` and `crates/mc-snap-loaders/tests/` - exercise Modrinth, URL, Mojang manifest, and Fabric Meta against stubbed HTTP servers.
+2. **Wiremock integration tests** in `tests/` - exercise Modrinth, URL, Mojang manifest, and Fabric Meta against stubbed HTTP servers.
 3. **Live end-to-end** in `scripts/e2e.sh` - builds the binary, scaffolds a Fabric 26.1.2 + fabric-api server under `.dev-servers/e2e/`, runs the full lifecycle (`install` x2, `start --detach`, boot wait, `status`, `console list`, `console say`, `logs`, `stop`), then `pack` -> fresh dir -> `unpack` -> `validate`. Driven by `make e2e`.

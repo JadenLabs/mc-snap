@@ -14,7 +14,7 @@ Usage: $0 [--debug] [--system] [--prefix DIR]
   --prefix DIR     install dir for --system (default: /usr/local/bin)
   -h, --help       show this help
 
-Default: cargo install --path crates/mc-snap-cli (release into ~/.cargo/bin).
+Default: cargo install --path . (release into ~/.cargo/bin).
 EOF
 }
 
@@ -32,9 +32,9 @@ cd "$(dirname "$0")/.."
 
 if [[ "$TARGET" == "user" ]]; then
     if [[ "$PROFILE" == "debug" ]]; then
-        cargo install --debug --path crates/mc-snap-cli --force
+        cargo install --debug --path . --force
     else
-        cargo install --path crates/mc-snap-cli --force
+        cargo install --path . --force
     fi
     DEST="${CARGO_HOME:-$HOME/.cargo}/bin/mc-snap"
 else

@@ -12,6 +12,14 @@ Tracks the Minecraft 26.x series; default scaffold pins 26.1.2 + Java 26. Tested
 
 ## Install
 
+From crates.io:
+
+```bash
+cargo install mc-snap
+```
+
+Or from source:
+
 ```bash
 git clone <repo> mc-snap
 cd mc-snap
@@ -130,7 +138,7 @@ Global cache shared across servers: `~/.local/share/mc-snap/{cache,jdks}/` on Li
 
 ```bash
 make build       # cargo build (debug — use `cargo build --release` for an optimized binary)
-make unit        # cargo test --workspace (unit + wiremock integration)
+make unit        # cargo test --all-targets (unit + wiremock integration)
 make e2e         # full lifecycle against a real Fabric server in .dev-servers/
 make all         # unit + e2e
 make fmt clippy  # formatting + lints
