@@ -141,8 +141,8 @@ Downloading is shared infrastructure in `mc-snap-core` - providers only resolve,
 | `mc-snap status` | Running/stopped, uptime, player count (via RCON) |
 | `mc-snap logs [-f]` | Tail `.mc-snap/server/logs/latest.log` |
 | `mc-snap console` | Interactive RCON shell |
-| `mc-snap pack [-o out.tar.gz]` | Source bundle: `mc-snap.yml` + `mc-snap.lock` + `configs/` |
-| `mc-snap unpack <bundle>` | Extract bundle into current dir |
+| `mc-snap pack -o out.zip` | Source bundle: `mc-snap.yml` + `mc-snap.lock` + `configs/` (zip, not tarball) |
+| `mc-snap unpack <bundle.zip>` | Extract bundle into current dir |
 | `mc-snap validate` | Schema check without network |
 | `mc-snap doctor` | Verify Java, network reachability, disk space |
 
@@ -187,17 +187,26 @@ sha256 = "..."
 
 `install` is a no-op when `state.json.applied_lock_hash == sha256(mc-snap.lock)`.
 
-## Open questions to revisit during implementation
+## Implementation notes (resolved during the build)
 
-- **EULA.** Require `eula: true` at top of yml; refuse to install without it. Write `eula.txt` accordingly.
-- **Plugin/datapack support for Fabric.** Fabric uses mods only; datapacks/resourcepacks can be modeled later under separate keys (`datapacks:`, `resourcepacks:`).
-- **Windows.** Test from the start - symlinks need admin or developer mode, so prefer hardlinks for the cache on Windows.
+- **Modrinth API shape.** Modrinth's `/version` payload exposes `hashes.sha512` and `hashes.sha1`, not `sha256`. The provider downloads the file in `resolve`, verifies the upstream sha512, computes our own sha256 for the lockfile, and pre-populates the content cache so the install step's `fetch_into_cache` short-circuits.
+- **Fabric launch flags.** Setting `-Dfabric.installer.server.gameJar=server.jar` triggers an NPE inside the Fabric installer when the path's parent is null. Launching the loader jar with no extra flags works: the launcher downloads the Minecraft jar and libraries on first boot.
+- **Detached spawn.** On Unix we set a `pre_exec` hook that calls `setsid` (via `nix`) so the child survives the CLI exit. Pid is recorded in `.mc-snap/pid`.
+- **EULA.** Required at the top of `mc-snap.yml`; install refuses without it and writes `eula.txt=true` accordingly.
+- **Bundles.** `pack` writes a `.zip` (DEFLATE) of `mc-snap.yml` + `mc-snap.lock` + `configs/`, no jars. `unpack` extracts it into the current directory.
+- **Windows cache linking.** Symlink on Unix, hardlink on Windows (no admin requirement).
 
-## Verification plan
+## Future scope
 
-End-to-end, in order of cheapness:
+- Plugin/datapack support for Fabric (`datapacks:`, `resourcepacks:` keys).
+- Additional loaders: Paper, Forge, NeoForge.
+- Additional providers: Hangar, CurseForge.
+- `update` command to refresh lockfile versions without re-installing.
 
-1. **Unit tests** in each crate - schema parsing, lockfile round-trip, version resolution against recorded API fixtures.
-2. **Integration tests** in `crates/mc-snap-cli/tests/` using `wiremock` to fake Modrinth and Adoptium. Run `mc-snap install` against a fixture yml, snapshot the resulting lockfile + directory tree.
-3. **Live smoke test** (manual or behind a feature flag): scaffold a Fabric 1.21.4 + Fabric API server, `mc-snap install && mc-snap start --detach`, wait for "Done!" in logs, send `list` via `mc-snap console`, `mc-snap stop`, assert the process is gone.
-4. **Bundle round-trip:** `mc-snap pack` → fresh directory → `mc-snap unpack && mc-snap install` → diff the two server trees (ignoring world/logs).
+## Verification
+
+What ships in the repo:
+
+1. **Unit tests** colocated with each crate - schema parsing, lockfile round-trip, RCON framing, Java version parsing.
+2. **Wiremock integration tests** in `crates/mc-snap-providers/tests/` and `crates/mc-snap-loaders/tests/` - exercise Modrinth, URL, Mojang manifest, and Fabric Meta against stubbed HTTP servers.
+3. **Live end-to-end** in `scripts/e2e.sh` - builds the binary, scaffolds a Fabric 1.21.4 + fabric-api server under `.dev-servers/e2e/`, runs the full lifecycle (`install` x2, `start --detach`, boot wait, `status`, `console list`, `console say`, `logs`, `stop`), then `pack` -> fresh dir -> `unpack` -> `validate`. Driven by `make e2e`.

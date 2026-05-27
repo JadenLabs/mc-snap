@@ -8,6 +8,7 @@ const MANIFEST: &str = "https://launchermeta.mojang.com/mc/game/version_manifest
 
 pub struct Vanilla {
     client: reqwest::Client,
+    manifest_url: String,
 }
 
 impl Default for Vanilla {
@@ -23,6 +24,14 @@ impl Vanilla {
                 .user_agent(concat!("mc-snap/", env!("CARGO_PKG_VERSION")))
                 .build()
                 .expect("client"),
+            manifest_url: MANIFEST.to_string(),
+        }
+    }
+
+    pub fn with_manifest_url(url: impl Into<String>) -> Self {
+        Self {
+            manifest_url: url.into(),
+            ..Self::new()
         }
     }
 }
@@ -66,7 +75,7 @@ impl ServerLoader for Vanilla {
     async fn resolve(&self, minecraft: &str, _spec: &LoaderSpec) -> anyhow::Result<ResolvedLoader> {
         let manifest: Manifest = self
             .client
-            .get(MANIFEST)
+            .get(&self.manifest_url)
             .send()
             .await?
             .error_for_status()?

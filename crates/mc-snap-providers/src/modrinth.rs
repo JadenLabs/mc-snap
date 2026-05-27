@@ -52,7 +52,10 @@ struct VersionFile {
 
 #[derive(Debug, Deserialize)]
 struct Hashes {
-    sha256: String,
+    sha512: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    sha1: Option<String>,
 }
 
 #[async_trait]
@@ -67,13 +70,14 @@ impl ModProvider for Modrinth {
             ModEntry::Url { .. } => anyhow::bail!("modrinth provider cannot resolve url entries"),
         };
 
-        let url = format!(
-            "{}/project/{}/version?loaders=[\"{}\"]&game_versions=[\"{}\"]",
-            self.base, id, env.loader_kind, env.minecraft
-        );
+        let url = format!("{}/project/{}/version", self.base, id);
         let versions: Vec<Version> = self
             .client
             .get(&url)
+            .query(&[
+                ("loaders", format!("[\"{}\"]", env.loader_kind)),
+                ("game_versions", format!("[\"{}\"]", env.minecraft)),
+            ])
             .send()
             .await?
             .error_for_status()?
@@ -111,13 +115,43 @@ impl ModProvider for Modrinth {
             .or_else(|| chosen.files.first())
             .ok_or_else(|| anyhow::anyhow!("modrinth version {} has no files", chosen.id))?;
 
+        let bytes = self
+            .client
+            .get(&file.url)
+            .send()
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+
+        use sha2::Digest;
+        let mut h = sha2::Sha512::new();
+        h.update(&bytes);
+        let got_sha512 = hex::encode(h.finalize());
+        if got_sha512 != file.hashes.sha512 {
+            anyhow::bail!(
+                "modrinth sha512 mismatch for {}: api says {}, got {got_sha512}",
+                file.filename,
+                file.hashes.sha512
+            );
+        }
+        let sha256 = mc_snap_core::cache::sha256_hex(&bytes);
+
+        if let Ok(globals) = mc_snap_core::paths::GlobalDirs::resolve() {
+            let _ = globals.ensure();
+            let cache = mc_snap_core::cache::ContentCache::new(globals.cache);
+            if !cache.contains(&sha256) {
+                let _ = cache.store(&sha256, &bytes);
+            }
+        }
+
         Ok(ResolvedMod {
             id,
             provider: "modrinth".into(),
             version: chosen.version_number.clone(),
             filename: file.filename.clone(),
             url: file.url.clone(),
-            sha256: file.hashes.sha256.clone(),
+            sha256,
         })
     }
 }

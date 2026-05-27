@@ -8,6 +8,7 @@ const META: &str = "https://meta.fabricmc.net/v2";
 
 pub struct Fabric {
     client: reqwest::Client,
+    base: String,
 }
 
 impl Default for Fabric {
@@ -23,6 +24,14 @@ impl Fabric {
                 .user_agent(concat!("mc-snap/", env!("CARGO_PKG_VERSION")))
                 .build()
                 .expect("client"),
+            base: META.to_string(),
+        }
+    }
+
+    pub fn with_base(base: impl Into<String>) -> Self {
+        Self {
+            base: base.into(),
+            ..Self::new()
         }
     }
 }
@@ -43,7 +52,7 @@ impl Fabric {
     async fn latest_loader(&self) -> anyhow::Result<String> {
         let v: Vec<LoaderVersion> = self
             .client
-            .get(format!("{META}/versions/loader"))
+            .get(format!("{}/versions/loader", self.base))
             .send()
             .await?
             .error_for_status()?
@@ -58,7 +67,7 @@ impl Fabric {
     async fn latest_installer(&self) -> anyhow::Result<String> {
         let v: Vec<InstallerVersion> = self
             .client
-            .get(format!("{META}/versions/installer"))
+            .get(format!("{}/versions/installer", self.base))
             .send()
             .await?
             .error_for_status()?
@@ -88,7 +97,8 @@ impl ServerLoader for Fabric {
         };
 
         let url = format!(
-            "{META}/versions/loader/{minecraft}/{loader}/{installer}/server/jar"
+            "{}/versions/loader/{minecraft}/{loader}/{installer}/server/jar",
+            self.base
         );
         let bytes = self
             .client
@@ -122,8 +132,7 @@ impl ServerLoader for Fabric {
         let mut cmd = Command::new(&ctx.java_bin);
         cmd.current_dir(&ctx.server_dir)
             .arg(format!("-Xms{mem}"))
-            .arg(format!("-Xmx{mem}"))
-            .arg("-Dfabric.installer.server.gameJar=server.jar");
+            .arg(format!("-Xmx{mem}"));
         for f in &ctx.extra_flags {
             cmd.arg(f);
         }
