@@ -223,6 +223,55 @@ async fn list_versions_rejects_url_entries() {
 }
 
 #[tokio::test]
+async fn lookup_by_sha512_resolves_to_slug_and_version() {
+    let server = MockServer::start().await;
+    let hash = "a".repeat(128);
+
+    Mock::given(method("GET"))
+        .and(path(format!("/version_file/{hash}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "verid1",
+            "project_id": "PROJ123",
+            "version_number": "1.2.3",
+            "game_versions": ["26.1.2"],
+            "loaders": ["fabric"],
+            "files": [{
+                "url": "https://example.com/x.jar",
+                "filename": "x.jar",
+                "hashes": {"sha512": hash, "sha1": "deadbeef"},
+                "primary": true
+            }]
+        })))
+        .mount(&server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/project/PROJ123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"slug": "lithium"})))
+        .mount(&server)
+        .await;
+
+    let p = Modrinth::with_base(server.uri());
+    let got = p.lookup_by_sha512(&hash).await.unwrap();
+    assert_eq!(got, Some(("lithium".to_string(), "1.2.3".to_string())));
+}
+
+#[tokio::test]
+async fn lookup_by_sha512_returns_none_on_404() {
+    let server = MockServer::start().await;
+    let hash = "b".repeat(128);
+
+    Mock::given(method("GET"))
+        .and(path(format!("/version_file/{hash}")))
+        .respond_with(ResponseTemplate::new(404))
+        .mount(&server)
+        .await;
+
+    let p = Modrinth::with_base(server.uri());
+    assert!(p.lookup_by_sha512(&hash).await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn detects_sha512_mismatch() {
     let server = MockServer::start().await;
     let jar = b"REAL_BYTES".to_vec();

@@ -1,0 +1,607 @@
+mod detect;
+
+use anyhow::Result;
+use inquire::ui::{Color, RenderConfig, StyleSheet, Styled};
+use inquire::{Confirm, CustomType, Select, Text};
+use serde_yml::{Mapping, Value};
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
+
+use crate::yml::ModEntry;
+use detect::Detected;
+
+const TEMPLATE: &str = r#"schema: 1
+eula: false
+
+server:
+  name: my-server
+  description: a mc-snap server
+  minecraft: 26.1.2
+  loader:
+    type: fabric
+
+runtime:
+  java: 26
+  memory: 4G
+  flags:
+    - -XX:+UseG1GC
+
+mods:
+  - id: fabric-api
+    provider: modrinth
+    version: latest
+
+config:
+  server.properties:
+    motd: my-server
+    max-players: 20
+"#;
+
+pub async fn run(
+    non_interactive: bool,
+    detect_path: Option<String>,
+    force: bool,
+    no_mod_resolve: bool,
+) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let target = cwd.join("mc-snap.yml");
+    let interactive = !non_interactive && std::io::stdin().is_terminal();
+
+    if target.exists() {
+        if force {
+            // overwrite silently
+        } else if interactive {
+            inquire::set_global_render_config(render_config());
+            let ok = Confirm::new(&format!(
+                "mc-snap.yml exists at {} — overwrite?",
+                target.display()
+            ))
+            .with_default(false)
+            .prompt()?;
+            if !ok {
+                anyhow::bail!("aborted: mc-snap.yml already exists");
+            }
+        } else {
+            anyhow::bail!(
+                "mc-snap.yml already exists at {} (use --force to overwrite)",
+                target.display()
+            );
+        }
+    }
+
+    let detected = if let Some(p) = detect_path {
+        let root = PathBuf::from(&p);
+        if !root.is_dir() {
+            anyhow::bail!("--detect path is not a directory: {}", root.display());
+        }
+        println!();
+        println!(
+            "\x1b[1;36m  mc-snap\x1b[0m \x1b[2m— detecting in {}\x1b[0m",
+            root.display()
+        );
+        let d = detect::detect(&root, !no_mod_resolve).await?;
+        print_detection_summary(&d, no_mod_resolve);
+        Some(d)
+    } else {
+        None
+    };
+
+    let body = match (&detected, interactive) {
+        (Some(d), true) => wizard(&cwd, Some(d))?,
+        (Some(d), false) => render_from_detected(&cwd, d),
+        (None, true) => wizard(&cwd, None)?,
+        (None, false) => TEMPLATE.to_string(),
+    };
+
+    std::fs::write(&target, &body)?;
+    ensure_gitignore(&cwd)?;
+
+    println!();
+    println!("\x1b[1;32m✓\x1b[0m created \x1b[1m{}\x1b[0m", target.display());
+    println!(
+        "  next: review the file, set \x1b[1meula: true\x1b[0m after reading \x1b[36mhttps://www.minecraft.net/en-us/eula\x1b[0m,"
+    );
+    println!("        then run \x1b[1mmc-snap install\x1b[0m");
+    Ok(())
+}
+
+fn print_detection_summary(d: &Detected, no_mod_resolve: bool) {
+    let bullet = "\x1b[1;32m✓\x1b[0m";
+    let warn = "\x1b[1;33m!\x1b[0m";
+    if let Some(unsup) = d.unsupported_loader {
+        println!(
+            "  {warn} detected {} server — mc-snap currently supports only vanilla and fabric",
+            unsup
+        );
+    }
+    if let Some(loader) = d.loader {
+        match (loader, d.fabric_loader_version.as_deref()) {
+            ("fabric", Some(v)) => println!("  {bullet} loader: fabric {v}"),
+            (l, _) => println!("  {bullet} loader: {l}"),
+        }
+    }
+    if let Some(mc) = &d.minecraft {
+        println!("  {bullet} minecraft: {mc}");
+    }
+    if let Some(j) = d.java_major {
+        println!("  {bullet} java: {j}");
+    }
+    if let Some(mem) = &d.memory {
+        println!("  {bullet} memory: {mem}");
+    }
+    if d.eula {
+        println!("  {bullet} eula: accepted");
+    }
+    if !d.server_properties.is_empty() {
+        println!(
+            "  {bullet} server.properties: {} entries",
+            d.server_properties.len()
+        );
+    }
+    if !d.mods.is_empty() || !d.unresolved_mods.is_empty() {
+        if no_mod_resolve {
+            println!(
+                "  {bullet} mods: {} jar(s) listed (resolve skipped)",
+                d.unresolved_mods.len()
+            );
+        } else {
+            println!(
+                "  {bullet} mods: {} resolved via Modrinth, {} unresolved",
+                d.mods.len(),
+                d.unresolved_mods.len()
+            );
+            for name in &d.unresolved_mods {
+                println!("    \x1b[2m-\x1b[0m {name}");
+            }
+        }
+    }
+    println!();
+}
+
+fn wizard(cwd: &Path, detected: Option<&Detected>) -> Result<String> {
+    inquire::set_global_render_config(render_config());
+
+    let dir_default = detected
+        .and_then(|d| d.name.clone())
+        .or_else(|| {
+            cwd.file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "my-server".to_string());
+
+    println!();
+    println!("\x1b[1;36m  mc-snap\x1b[0m \x1b[2m— new server config\x1b[0m");
+    println!("\x1b[2m  arrow keys to navigate, enter to confirm, ctrl-c to cancel\x1b[0m");
+    println!();
+
+    let name = Text::new("Server name")
+        .with_default(&dir_default)
+        .with_validator(inquire::required!("server name is required"))
+        .prompt()?;
+
+    let description = Text::new("Description")
+        .with_default("a mc-snap server")
+        .prompt()?;
+
+    let mc_default = detected
+        .and_then(|d| d.minecraft.clone())
+        .unwrap_or_else(|| "26.1.2".to_string());
+    let minecraft = Text::new("Minecraft version")
+        .with_default(&mc_default)
+        .with_help_message("e.g. 26.1.2")
+        .with_validator(inquire::required!("minecraft version is required"))
+        .prompt()?;
+
+    let loader_default_idx = match detected.and_then(|d| d.loader) {
+        Some("vanilla") => 1,
+        _ => 0,
+    };
+    let loader = Select::new("Loader", vec!["fabric", "vanilla"])
+        .with_starting_cursor(loader_default_idx)
+        .with_help_message("fabric supports mods; vanilla is mod-free")
+        .prompt()?;
+
+    let java_default = detected.and_then(|d| d.java_major).unwrap_or(26);
+    let java = CustomType::<u32>::new("Java version")
+        .with_default(java_default)
+        .with_help_message("major version only, e.g. 21 or 26")
+        .with_error_message("enter a positive integer")
+        .prompt()?;
+
+    let mem_default = detected
+        .and_then(|d| d.memory.clone())
+        .unwrap_or_else(|| "4G".to_string());
+    let memory = Text::new("Memory")
+        .with_default(&mem_default)
+        .with_help_message("e.g. 2G, 4G, 8G")
+        .with_validator(inquire::required!("memory is required"))
+        .prompt()?;
+
+    let motd_detected = detected.and_then(|d| {
+        d.server_properties
+            .get(Value::String("motd".to_string()))
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+    });
+    let motd_default = motd_detected.unwrap_or_else(|| name.clone());
+    let motd = Text::new("MOTD").with_default(&motd_default).prompt()?;
+
+    let max_players_detected = detected.and_then(|d| {
+        d.server_properties
+            .get(Value::String("max-players".to_string()))
+            .and_then(|v| v.as_i64())
+            .and_then(|n| u32::try_from(n).ok())
+    });
+    let max_players = CustomType::<u32>::new("Max players")
+        .with_default(max_players_detected.unwrap_or(20))
+        .with_error_message("enter a positive integer")
+        .prompt()?;
+
+    // If detection already found a mod list, don't ask about fabric-api again — keep what we found.
+    let detected_has_mods = detected.is_some_and(|d| !d.mods.is_empty());
+    let include_fabric_api = if loader == "fabric" && !detected_has_mods {
+        Confirm::new("Include fabric-api?")
+            .with_default(true)
+            .with_help_message("the core mod API most fabric mods depend on")
+            .prompt()?
+    } else {
+        false
+    };
+
+    let eula_default = detected.is_some_and(|d| d.eula);
+    let eula = Confirm::new("Accept the Minecraft EULA?")
+        .with_default(eula_default)
+        .with_help_message(
+            "https://www.minecraft.net/en-us/eula — required before starting the server",
+        )
+        .prompt()?;
+
+    let mods: Vec<ModEntry> = if detected_has_mods {
+        detected.unwrap().mods.clone()
+    } else if include_fabric_api {
+        vec![ModEntry::Registry {
+            id: "fabric-api".to_string(),
+            provider: "modrinth".to_string(),
+            version: "latest".to_string(),
+        }]
+    } else {
+        Vec::new()
+    };
+
+    let mut props = detected
+        .map(|d| d.server_properties.clone())
+        .unwrap_or_default();
+    set_prop(&mut props, "motd", Value::String(motd));
+    set_prop(
+        &mut props,
+        "max-players",
+        Value::Number((max_players as i64).into()),
+    );
+
+    Ok(render_yml(
+        &name,
+        &description,
+        &minecraft,
+        loader,
+        java,
+        &memory,
+        &mods,
+        &props,
+        eula,
+    ))
+}
+
+fn render_from_detected(cwd: &Path, d: &Detected) -> String {
+    let name = d
+        .name
+        .clone()
+        .or_else(|| {
+            cwd.file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "my-server".to_string());
+    let description = "a mc-snap server".to_string();
+    let minecraft = d.minecraft.clone().unwrap_or_else(|| "26.1.2".to_string());
+    let loader = d.loader.unwrap_or("fabric");
+    let java = d.java_major.unwrap_or(26);
+    let memory = d.memory.clone().unwrap_or_else(|| "4G".to_string());
+
+    let mut props = d.server_properties.clone();
+    if !props.contains_key(Value::String("motd".to_string())) {
+        set_prop(&mut props, "motd", Value::String(name.clone()));
+    }
+    if !props.contains_key(Value::String("max-players".to_string())) {
+        set_prop(&mut props, "max-players", Value::Number(20i64.into()));
+    }
+
+    render_yml(
+        &name,
+        &description,
+        &minecraft,
+        loader,
+        java,
+        &memory,
+        &d.mods,
+        &props,
+        d.eula,
+    )
+}
+
+fn set_prop(m: &mut Mapping, key: &str, value: Value) {
+    m.insert(Value::String(key.to_string()), value);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_yml(
+    name: &str,
+    description: &str,
+    minecraft: &str,
+    loader: &str,
+    java: u32,
+    memory: &str,
+    mods: &[ModEntry],
+    server_properties: &Mapping,
+    eula: bool,
+) -> String {
+    let mut out = String::new();
+    out.push_str("schema: 1\n");
+    out.push_str(&format!("eula: {eula}\n\n"));
+
+    out.push_str("server:\n");
+    out.push_str(&format!("  name: {}\n", yaml_scalar(name)));
+    if !description.trim().is_empty() {
+        out.push_str(&format!("  description: {}\n", yaml_scalar(description)));
+    }
+    out.push_str(&format!("  minecraft: {}\n", yaml_scalar(minecraft)));
+    out.push_str("  loader:\n");
+    out.push_str(&format!("    type: {loader}\n"));
+    out.push('\n');
+
+    out.push_str("runtime:\n");
+    out.push_str(&format!("  java: {java}\n"));
+    out.push_str(&format!("  memory: {}\n", yaml_scalar(memory)));
+    out.push_str("  flags:\n");
+    out.push_str("    - -XX:+UseG1GC\n");
+    out.push('\n');
+
+    if mods.is_empty() {
+        out.push_str("mods: []\n\n");
+    } else {
+        out.push_str("mods:\n");
+        for entry in mods {
+            match entry {
+                ModEntry::Registry { id, provider, version } => {
+                    out.push_str(&format!("  - id: {}\n", yaml_scalar(id)));
+                    out.push_str(&format!("    provider: {}\n", yaml_scalar(provider)));
+                    out.push_str(&format!("    version: {}\n", yaml_scalar(version)));
+                }
+                ModEntry::Url { url, provider, sha256, filename } => {
+                    out.push_str(&format!("  - url: {}\n", yaml_scalar(url)));
+                    out.push_str(&format!("    provider: {}\n", yaml_scalar(provider)));
+                    out.push_str(&format!("    sha256: {}\n", yaml_scalar(sha256)));
+                    if let Some(f) = filename {
+                        out.push_str(&format!("    filename: {}\n", yaml_scalar(f)));
+                    }
+                }
+            }
+        }
+        out.push('\n');
+    }
+
+    out.push_str("config:\n");
+    out.push_str("  server.properties:\n");
+    for (k, v) in server_properties.iter() {
+        let key = k.as_str().unwrap_or_default();
+        out.push_str(&format!("    {}: {}\n", yaml_scalar(key), render_value(v)));
+    }
+
+    out
+}
+
+fn render_value(v: &Value) -> String {
+    match v {
+        Value::Bool(b) => b.to_string(),
+        Value::Number(n) => n.to_string(),
+        Value::String(s) => yaml_scalar(s),
+        Value::Null => "null".to_string(),
+        other => serde_yml::to_string(other)
+            .unwrap_or_default()
+            .trim_end()
+            .to_string(),
+    }
+}
+
+fn yaml_scalar(s: &str) -> String {
+    let needs_quote = s.is_empty()
+        || s.contains(':')
+        || s.contains('#')
+        || s.contains('"')
+        || s.contains('\\')
+        || s.starts_with(' ')
+        || s.ends_with(' ')
+        || s.starts_with('-')
+        || s.starts_with(|c: char| {
+            matches!(
+                c,
+                '!' | '&' | '*' | '[' | '{' | '|' | '>' | '\'' | '%' | '@' | '`'
+            )
+        });
+    if needs_quote {
+        let escaped = s.replace('\\', "\\\\").replace('"', "\\\"");
+        format!("\"{escaped}\"")
+    } else {
+        s.to_string()
+    }
+}
+
+fn render_config() -> RenderConfig<'static> {
+    RenderConfig::default()
+        .with_prompt_prefix(Styled::new("›").with_fg(Color::LightCyan))
+        .with_answered_prompt_prefix(Styled::new("✓").with_fg(Color::LightGreen))
+        .with_help_message(StyleSheet::new().with_fg(Color::DarkGrey))
+        .with_answer(StyleSheet::new().with_fg(Color::LightCyan))
+        .with_default_value(StyleSheet::new().with_fg(Color::DarkGrey))
+}
+
+fn ensure_gitignore(dir: &Path) -> Result<()> {
+    let path = dir.join(".gitignore");
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    if existing.lines().any(|l| l.trim() == ".mc-snap") || existing.lines().any(|l| l.trim() == ".mc-snap/") {
+        return Ok(());
+    }
+    let mut new = existing;
+    if !new.ends_with('\n') && !new.is_empty() {
+        new.push('\n');
+    }
+    new.push_str(".mc-snap/\n");
+    std::fs::write(path, new)?;
+    Ok(())
+}
+
+#[cfg(test)]
+fn props_with(motd: &str, max_players: u32) -> Mapping {
+    let mut m = Mapping::new();
+    m.insert(Value::String("motd".into()), Value::String(motd.into()));
+    m.insert(
+        Value::String("max-players".into()),
+        Value::Number((max_players as i64).into()),
+    );
+    m
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::yml::Snap;
+
+    #[test]
+    fn rendered_yml_parses_and_round_trips() {
+        let mods = vec![ModEntry::Registry {
+            id: "fabric-api".into(),
+            provider: "modrinth".into(),
+            version: "latest".into(),
+        }];
+        let props = props_with("welcome!", 20);
+        let body = render_yml(
+            "grimwald",
+            "the grimwald smp",
+            "26.1.2",
+            "fabric",
+            26,
+            "4G",
+            &mods,
+            &props,
+            true,
+        );
+        let snap = Snap::from_str(&body).unwrap();
+        assert_eq!(snap.server.name, "grimwald");
+        assert_eq!(snap.server.minecraft, "26.1.2");
+        assert_eq!(snap.server.loader.kind, "fabric");
+        assert_eq!(snap.runtime.java, Some(26));
+        assert_eq!(snap.mods.len(), 1);
+        assert!(snap.eula);
+    }
+
+    #[test]
+    fn vanilla_without_mods_has_empty_mods() {
+        let props = props_with("hi", 10);
+        let body = render_yml(
+            "vanilla-svr",
+            "",
+            "26.1.2",
+            "vanilla",
+            26,
+            "2G",
+            &[],
+            &props,
+            false,
+        );
+        let snap = Snap::from_str(&body).unwrap();
+        assert_eq!(snap.server.loader.kind, "vanilla");
+        assert!(snap.mods.is_empty());
+        assert!(!snap.eula);
+    }
+
+    #[test]
+    fn quotes_values_with_special_chars() {
+        let mut props = Mapping::new();
+        props.insert(
+            Value::String("motd".into()),
+            Value::String("say \"hi\"".into()),
+        );
+        props.insert(
+            Value::String("max-players".into()),
+            Value::Number(20i64.into()),
+        );
+        let body = render_yml(
+            "weird:name",
+            "has # hash",
+            "26.1.2",
+            "fabric",
+            26,
+            "4G",
+            &[],
+            &props,
+            false,
+        );
+        let snap = Snap::from_str(&body).unwrap();
+        assert_eq!(snap.server.name, "weird:name");
+    }
+
+    #[test]
+    fn yaml_scalar_passes_simple_strings_through() {
+        assert_eq!(yaml_scalar("hello"), "hello");
+        assert_eq!(yaml_scalar("my-server"), "my-server");
+        assert_eq!(yaml_scalar("-leading-dash"), "\"-leading-dash\"");
+        assert_eq!(yaml_scalar(""), "\"\"");
+        assert_eq!(yaml_scalar("a:b"), "\"a:b\"");
+        assert_eq!(yaml_scalar("has # hash"), "\"has # hash\"");
+    }
+
+    #[test]
+    fn renders_url_mod_entry() {
+        let mods = vec![ModEntry::Url {
+            url: "https://example.com/x.jar".into(),
+            provider: "url".into(),
+            sha256: "0".repeat(64),
+            filename: Some("x.jar".into()),
+        }];
+        let props = props_with("hi", 20);
+        let body = render_yml(
+            "s", "", "26.1.2", "vanilla", 26, "2G", &mods, &props, false,
+        );
+        let snap = Snap::from_str(&body).unwrap();
+        assert_eq!(snap.mods.len(), 1);
+    }
+
+    #[test]
+    fn server_properties_preserves_numbers_as_ints() {
+        let mut props = Mapping::new();
+        props.insert(
+            Value::String("max-players".into()),
+            Value::Number(20i64.into()),
+        );
+        props.insert(
+            Value::String("online-mode".into()),
+            Value::Bool(true),
+        );
+        props.insert(
+            Value::String("motd".into()),
+            Value::String("hello".into()),
+        );
+        let body = render_yml(
+            "s", "", "26.1.2", "vanilla", 26, "2G", &[], &props, false,
+        );
+        let snap = Snap::from_str(&body).unwrap();
+        let saved = &snap.config.server_properties;
+        assert_eq!(
+            saved[Value::String("max-players".into())],
+            Value::Number(20i64.into())
+        );
+        assert_eq!(
+            saved[Value::String("online-mode".into())],
+            Value::Bool(true)
+        );
+    }
+}

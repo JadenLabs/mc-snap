@@ -41,6 +41,8 @@ struct Version {
     files: Vec<VersionFile>,
     #[serde(default)]
     date_published: Option<String>,
+    #[serde(default)]
+    project_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,6 +60,41 @@ struct Hashes {
     #[serde(default)]
     #[allow(dead_code)]
     sha1: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Project {
+    slug: String,
+}
+
+impl Modrinth {
+    /// Look up a Modrinth project by jar SHA-512. Returns `(slug, version_number)`
+    /// on a 200, `None` on 404. Used by `init --detect` to identify jars on disk.
+    pub async fn lookup_by_sha512(
+        &self,
+        hash: &str,
+    ) -> anyhow::Result<Option<(String, String)>> {
+        let url = format!("{}/version_file/{}?algorithm=sha512", self.base, hash);
+        let resp = self.client.get(&url).send().await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let version: Version = resp.error_for_status()?.json().await?;
+        let project_id = version
+            .project_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("modrinth version response missing project_id"))?;
+        let proj_url = format!("{}/project/{}", self.base, project_id);
+        let project: Project = self
+            .client
+            .get(&proj_url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(Some((project.slug, version.version_number)))
+    }
 }
 
 #[async_trait]

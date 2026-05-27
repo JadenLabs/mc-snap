@@ -16,6 +16,15 @@ enum Cmd {
         /// Skip the interactive wizard and write the default template.
         #[arg(long)]
         non_interactive: bool,
+        /// Detect server structure in PATH (defaults to current dir) and pre-fill the wizard.
+        #[arg(long, value_name = "PATH", num_args = 0..=1, default_missing_value = ".")]
+        detect: Option<String>,
+        /// Overwrite an existing mc-snap.yml without prompting.
+        #[arg(long)]
+        force: bool,
+        /// Skip Modrinth lookups when detecting mods (offline mode).
+        #[arg(long)]
+        no_mod_resolve: bool,
     },
     Install,
     Validate,
@@ -92,7 +101,9 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Init { non_interactive } => commands::init::run(non_interactive).await,
+        Cmd::Init { non_interactive, detect, force, no_mod_resolve } => {
+            commands::init::run(non_interactive, detect, force, no_mod_resolve).await
+        }
         Cmd::Install => commands::install::run().await,
         Cmd::Validate => commands::validate::run().await,
         Cmd::Doctor => commands::doctor::run().await,
