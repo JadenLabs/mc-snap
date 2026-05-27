@@ -1,0 +1,7 @@
+/target
+Cargo.lock.bak
+.mc-snap/
+*.swp
+.DS_Store
+
+/.dev-servers

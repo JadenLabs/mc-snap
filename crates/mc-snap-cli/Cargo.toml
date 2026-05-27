@@ -1,0 +1,24 @@
+[package]
+name = "mc-snap-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "mc-snap"
+path = "src/main.rs"
+
+[dependencies]
+mc-snap-core.workspace = true
+mc-snap-providers.workspace = true
+mc-snap-loaders.workspace = true
+mc-snap-runtime.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_yml.workspace = true
+zip.workspace = true

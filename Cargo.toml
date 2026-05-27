@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mc-snap-cli",
+    "crates/mc-snap-core",
+    "crates/mc-snap-providers",
+    "crates/mc-snap-loaders",
+    "crates/mc-snap-runtime",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jadenk/mc-snap"
+
+[workspace.dependencies]
+mc-snap-core = { path = "crates/mc-snap-core" }
+mc-snap-providers = { path = "crates/mc-snap-providers" }
+mc-snap-loaders = { path = "crates/mc-snap-loaders" }
+mc-snap-runtime = { path = "crates/mc-snap-runtime" }
+
+anyhow = "1"
+thiserror = "1"
+async-trait = "0.1"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yml = "0.0.12"
+toml = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+directories = "5"
+futures-util = "0.3"
+tempfile = "3"
+zip = "2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
