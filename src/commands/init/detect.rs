@@ -19,6 +19,9 @@ pub struct Detected {
     pub mods: Vec<ModEntry>,
     pub unresolved_mods: Vec<String>,
     pub unsupported_loader: Option<&'static str>,
+    /// Relative path from the cwd (where `mc-snap.yml` is written) to the detected
+    /// server directory. `None` when the detect path *is* the cwd.
+    pub detected_location: Option<String>,
 }
 
 pub async fn detect(root: &Path, resolve_mods: bool) -> Result<Detected> {
@@ -27,6 +30,7 @@ pub async fn detect(root: &Path, resolve_mods: bool) -> Result<Detected> {
             .file_name()
             .and_then(|s| s.to_str())
             .map(|s| s.to_string()),
+        detected_location: compute_detected_location(root),
         ..Default::default()
     };
 
@@ -58,6 +62,28 @@ pub async fn detect(root: &Path, resolve_mods: bool) -> Result<Detected> {
     }
 
     Ok(d)
+}
+
+fn compute_detected_location(root: &Path) -> Option<String> {
+    let cwd = std::env::current_dir().ok()?;
+    let abs_root = root.canonicalize().unwrap_or_else(|_| {
+        if root.is_absolute() {
+            root.to_path_buf()
+        } else {
+            cwd.join(root)
+        }
+    });
+    let abs_cwd = cwd.canonicalize().unwrap_or(cwd);
+    if abs_root == abs_cwd {
+        return None;
+    }
+    let rel = abs_root.strip_prefix(&abs_cwd).ok()?;
+    let s = rel.to_string_lossy().to_string();
+    if s.is_empty() || s == "." {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 fn detect_unsupported_loader(root: &Path) -> Option<&'static str> {

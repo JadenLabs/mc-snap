@@ -22,6 +22,8 @@ pub struct Server {
     pub description: Option<String>,
     pub minecraft: String,
     pub loader: Loader,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -66,6 +68,30 @@ fn default_version() -> String {
     "latest".to_string()
 }
 
+fn validate_location(loc: &str) -> anyhow::Result<()> {
+    let trimmed = loc.trim();
+    if trimmed.is_empty() || trimmed == "." {
+        return Ok(());
+    }
+    let p = Path::new(trimmed);
+    if p.is_absolute() {
+        anyhow::bail!("server.location must be a relative path, got {trimmed}");
+    }
+    for comp in p.components() {
+        use std::path::Component;
+        match comp {
+            Component::ParentDir => {
+                anyhow::bail!("server.location must not contain `..`")
+            }
+            Component::Prefix(_) | Component::RootDir => {
+                anyhow::bail!("server.location must be a relative path")
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ConfigSection {
     #[serde(rename = "server.properties", default)]
@@ -108,6 +134,9 @@ impl Snap {
                     anyhow::bail!("url mod entries require a 64-char hex sha256");
                 }
             }
+        }
+        if let Some(loc) = &self.server.location {
+            validate_location(loc)?;
         }
         Ok(())
     }
@@ -174,5 +203,30 @@ mods:
     fn rejects_wrong_schema() {
         let bad = "schema: 2\nserver:\n  name: x\n  minecraft: 26.1.2\n  loader: { type: vanilla }\n";
         assert!(Snap::from_str(bad).is_err());
+    }
+
+    #[test]
+    fn accepts_relative_location() {
+        let yml = "schema: 1\nserver:\n  name: x\n  minecraft: 26.1.2\n  location: server\n  loader: { type: vanilla }\n";
+        let snap = Snap::from_str(yml).unwrap();
+        assert_eq!(snap.server.location.as_deref(), Some("server"));
+    }
+
+    #[test]
+    fn rejects_absolute_location() {
+        let yml = "schema: 1\nserver:\n  name: x\n  minecraft: 26.1.2\n  location: /etc\n  loader: { type: vanilla }\n";
+        assert!(Snap::from_str(yml).is_err());
+    }
+
+    #[test]
+    fn rejects_parent_traversal_location() {
+        let yml = "schema: 1\nserver:\n  name: x\n  minecraft: 26.1.2\n  location: ../escape\n  loader: { type: vanilla }\n";
+        assert!(Snap::from_str(yml).is_err());
+    }
+
+    #[test]
+    fn missing_location_defaults_to_none() {
+        let snap = Snap::from_str(SAMPLE).unwrap();
+        assert!(snap.server.location.is_none());
     }
 }

@@ -151,8 +151,8 @@ pub async fn run(
         write_atomic(&layout.yml(), new_yml_text.as_bytes())?;
         new_lock.write(&layout.lock())?;
 
-        if layout.server_dir().is_dir() {
-            clean_with_old_lock_aware(&layout, &new_lock)?;
+        if layout.server_dir_for(&new_snap).is_dir() {
+            clean_with_old_lock_aware(&layout, &new_snap, &new_lock)?;
         }
         orchestrate::materialize(&layout, &new_snap, &new_lock).await?;
         Result::<()>::Ok(())
@@ -170,8 +170,8 @@ pub async fn run(
         }
         // Try to leave the server dir consistent with the restored lock.
         if let Ok(restored_lock) = crate::lock::Lock::from_path(&layout.lock()) {
-            let _ = orchestrate::clean_stale_artifacts(&layout, &restored_lock);
             if let Ok(restored_snap) = Snap::from_path(&layout.yml()) {
+                let _ = orchestrate::clean_stale_artifacts(&layout, &restored_snap, &restored_lock);
                 let _ = orchestrate::materialize(&layout, &restored_snap, &restored_lock).await;
             }
         }
@@ -198,8 +198,8 @@ fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn clean_with_old_lock_aware(layout: &ProjectLayout, new_lock: &Lock) -> Result<()> {
-    orchestrate::clean_stale_artifacts(layout, new_lock)
+fn clean_with_old_lock_aware(layout: &ProjectLayout, snap: &Snap, new_lock: &Lock) -> Result<()> {
+    orchestrate::clean_stale_artifacts(layout, snap, new_lock)
 }
 
 fn now_rfc3339() -> String {

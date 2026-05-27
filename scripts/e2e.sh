@@ -19,6 +19,17 @@ green()  { printf '\033[32m%s\033[0m\n' "$*"; }
 red()    { printf '\033[31m%s\033[0m\n' "$*"; }
 step()   { printf '\n\033[1;36m== %s ==\033[0m\n' "$*"; }
 
+server_root() {
+    # mc-snap.yml may set server.location to a subdir; default is the project root.
+    local loc
+    loc=$(grep -E '^\s*location:' "$TEST_DIR/mc-snap.yml" 2>/dev/null | awk '{print $2}' | tr -d '"' | head -n 1)
+    if [ -n "$loc" ] && [ "$loc" != "." ]; then
+        printf '%s/%s' "$TEST_DIR" "$loc"
+    else
+        printf '%s' "$TEST_DIR"
+    fi
+}
+
 cleanup() {
     local rc=$?
     if [ -d "$TEST_DIR" ] && [ -f "$TEST_DIR/.mc-snap/pid" ]; then
@@ -27,9 +38,11 @@ cleanup() {
     fi
     if [ "$rc" -ne 0 ]; then
         red "FAILED (exit $rc)"
-        if [ -f "$TEST_DIR/.mc-snap/server/logs/latest.log" ]; then
+        local log
+        log="$(server_root 2>/dev/null)/logs/latest.log"
+        if [ -f "$log" ]; then
             echo "--- last 40 lines of server log ---"
-            tail -n 40 "$TEST_DIR/.mc-snap/server/logs/latest.log"
+            tail -n 40 "$log"
         fi
     fi
     exit $rc
@@ -109,15 +122,20 @@ if [ ! -f "$TEST_DIR/mc-snap.lock" ]; then
     red "lockfile not written"
     exit 1
 fi
-if [ ! -f "$TEST_DIR/.mc-snap/server/fabric-server-launch.jar" ]; then
-    red "fabric server launcher not in place"
+SROOT=$(server_root)
+if [ ! -f "$SROOT/fabric-server-launch.jar" ]; then
+    red "fabric server launcher not in place at $SROOT"
     exit 1
 fi
-if ! ls "$TEST_DIR/.mc-snap/server/mods/" | grep -qi fabric-api; then
-    red "fabric-api mod not in mods folder"
+if ! ls "$SROOT/mods/" | grep -qi fabric-api; then
+    red "fabric-api mod not in mods folder ($SROOT/mods)"
     exit 1
 fi
-green "install artifacts look correct"
+if [ -d "$TEST_DIR/.mc-snap/server" ]; then
+    red "legacy .mc-snap/server directory unexpectedly present"
+    exit 1
+fi
+green "install artifacts look correct (server root: $SROOT)"
 
 step "idempotent install"
 (cd "$TEST_DIR" && "$BIN" install)
@@ -127,7 +145,7 @@ step "start --detach"
 (cd "$TEST_DIR" && "$BIN" start --detach)
 
 step "wait for server to boot (up to ${BOOT_TIMEOUT}s)"
-LOG="$TEST_DIR/.mc-snap/server/logs/latest.log"
+LOG="$(server_root)/logs/latest.log"
 deadline=$(( $(date +%s) + BOOT_TIMEOUT ))
 booted=0
 while [ "$(date +%s)" -lt "$deadline" ]; do

@@ -27,12 +27,14 @@ pub async fn run(detach: bool) -> Result<()> {
     info!("using java {} at {}", java_install.major, java_install.bin.display());
 
     let loader_impl = crate::loaders::for_kind(&snap.server.loader.kind)?;
+    let server_dir = layout.server_dir_for(&snap);
+    let launch_jar = server_dir.join(match snap.server.loader.kind.as_str() {
+        "fabric" => "fabric-server-launch.jar",
+        _ => "server.jar",
+    });
     let ctx = LaunchCtx {
-        server_dir: layout.server_dir(),
-        launch_jar: layout.server_dir().join(match snap.server.loader.kind.as_str() {
-            "fabric" => "fabric-server-launch.jar",
-            _ => "server.jar",
-        }),
+        server_dir,
+        launch_jar,
         java_bin: java_install.bin,
         memory: snap.runtime.memory.clone().unwrap_or_else(|| "2G".into()),
         extra_flags: snap.runtime.flags.clone(),

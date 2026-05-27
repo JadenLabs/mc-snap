@@ -1,11 +1,13 @@
 use anyhow::Result;
 use crate::paths::ProjectLayout;
+use crate::yml::Snap;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::time::Duration;
 
 pub async fn run(follow: bool) -> Result<()> {
     let layout = ProjectLayout::discover(&std::env::current_dir()?)?;
-    let log = layout.server_dir().join("logs").join("latest.log");
+    let snap = Snap::from_path(&layout.yml())?;
+    let log = layout.server_dir_for(&snap).join("logs").join("latest.log");
     if !log.is_file() {
         anyhow::bail!("no log file at {} yet", log.display());
     }

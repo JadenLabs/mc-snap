@@ -75,7 +75,7 @@ pub async fn materialize(layout: &ProjectLayout, snap: &Snap, lock: &Lock) -> Re
     let cache = ContentCache::new(globals.cache.clone());
     let client = http_client()?;
 
-    let server_dir = layout.server_dir();
+    let server_dir = layout.server_dir_for(snap);
     std::fs::create_dir_all(&server_dir)?;
     std::fs::create_dir_all(server_dir.join("mods"))?;
     std::fs::create_dir_all(server_dir.join("config"))?;
@@ -229,8 +229,8 @@ pub fn read_rcon_password(layout: &ProjectLayout) -> Result<String> {
 
 /// Remove mod jars and stale launch jars from the server dir that are not in `lock`.
 /// World data and config files are left alone.
-pub fn clean_stale_artifacts(layout: &ProjectLayout, lock: &Lock) -> Result<()> {
-    let server_dir = layout.server_dir();
+pub fn clean_stale_artifacts(layout: &ProjectLayout, snap: &Snap, lock: &Lock) -> Result<()> {
+    let server_dir = layout.server_dir_for(snap);
     let mods_dir = server_dir.join("mods");
     if mods_dir.is_dir() {
         let expected: std::collections::HashSet<&str> =
@@ -271,7 +271,29 @@ pub fn clean_stale_artifacts(layout: &ProjectLayout, lock: &Lock) -> Result<()> 
 mod tests {
     use super::*;
     use crate::lock::{LockLoader, LockMod};
+    use crate::yml::{Loader, Server};
     use tempfile::TempDir;
+
+    fn snap_with(loader_kind: &str, location: Option<&str>) -> Snap {
+        Snap {
+            schema: 1,
+            eula: true,
+            server: Server {
+                name: "test".into(),
+                description: None,
+                minecraft: "26.1.2".into(),
+                loader: Loader {
+                    kind: loader_kind.into(),
+                    version: None,
+                    installer: None,
+                },
+                location: location.map(|s| s.to_string()),
+            },
+            runtime: Default::default(),
+            mods: vec![],
+            config: Default::default(),
+        }
+    }
 
     fn lock_with(loader_kind: &str, mod_filenames: &[&str]) -> Lock {
         Lock {
@@ -305,39 +327,33 @@ mod tests {
     fn removes_stale_mods_and_wrong_launch_jar() {
         let td = TempDir::new().unwrap();
         let layout = ProjectLayout::at(td.path().to_path_buf());
-        let mods = layout.server_dir().join("mods");
+        let snap = snap_with("fabric", None);
+        let sdir = layout.server_dir_for(&snap);
+        let mods = sdir.join("mods");
         std::fs::create_dir_all(&mods).unwrap();
 
         std::fs::write(mods.join("fabric-api.jar"), b"keep").unwrap();
         std::fs::write(mods.join("oldmod.jar"), b"stale").unwrap();
-        std::fs::write(layout.server_dir().join("server.jar"), b"stale-vanilla").unwrap();
-        std::fs::write(
-            layout.server_dir().join("fabric-server-launch.jar"),
-            b"keep-fabric",
-        )
-        .unwrap();
-        // World data and arbitrary configs should be left alone.
-        std::fs::create_dir_all(layout.server_dir().join("world")).unwrap();
-        std::fs::write(layout.server_dir().join("world").join("level.dat"), b"world").unwrap();
+        std::fs::write(sdir.join("server.jar"), b"stale-vanilla").unwrap();
+        std::fs::write(sdir.join("fabric-server-launch.jar"), b"keep-fabric").unwrap();
+        std::fs::create_dir_all(sdir.join("world")).unwrap();
+        std::fs::write(sdir.join("world").join("level.dat"), b"world").unwrap();
 
         let lock = lock_with("fabric", &["fabric-api.jar"]);
-        clean_stale_artifacts(&layout, &lock).unwrap();
+        clean_stale_artifacts(&layout, &snap, &lock).unwrap();
 
         assert!(mods.join("fabric-api.jar").exists(), "expected mod kept");
         assert!(!mods.join("oldmod.jar").exists(), "stale mod removed");
         assert!(
-            !layout.server_dir().join("server.jar").exists(),
+            !sdir.join("server.jar").exists(),
             "stale vanilla launch jar removed for fabric loader"
         );
         assert!(
-            layout
-                .server_dir()
-                .join("fabric-server-launch.jar")
-                .exists(),
+            sdir.join("fabric-server-launch.jar").exists(),
             "expected fabric launch jar kept"
         );
         assert!(
-            layout.server_dir().join("world").join("level.dat").exists(),
+            sdir.join("world").join("level.dat").exists(),
             "world preserved"
         );
     }
@@ -346,33 +362,49 @@ mod tests {
     fn keeps_vanilla_jar_when_loader_is_vanilla() {
         let td = TempDir::new().unwrap();
         let layout = ProjectLayout::at(td.path().to_path_buf());
-        std::fs::create_dir_all(layout.server_dir().join("mods")).unwrap();
-        std::fs::write(layout.server_dir().join("server.jar"), b"keep").unwrap();
-        std::fs::write(
-            layout.server_dir().join("fabric-server-launch.jar"),
-            b"stale-fabric",
-        )
-        .unwrap();
+        let snap = snap_with("vanilla", None);
+        let sdir = layout.server_dir_for(&snap);
+        std::fs::create_dir_all(sdir.join("mods")).unwrap();
+        std::fs::write(sdir.join("server.jar"), b"keep").unwrap();
+        std::fs::write(sdir.join("fabric-server-launch.jar"), b"stale-fabric").unwrap();
 
         let lock = lock_with("vanilla", &[]);
-        clean_stale_artifacts(&layout, &lock).unwrap();
+        clean_stale_artifacts(&layout, &snap, &lock).unwrap();
 
-        assert!(layout.server_dir().join("server.jar").exists());
-        assert!(
-            !layout
-                .server_dir()
-                .join("fabric-server-launch.jar")
-                .exists()
-        );
+        assert!(sdir.join("server.jar").exists());
+        assert!(!sdir.join("fabric-server-launch.jar").exists());
     }
 
     #[test]
     fn is_noop_when_server_dir_missing() {
         let td = TempDir::new().unwrap();
         let layout = ProjectLayout::at(td.path().to_path_buf());
+        let snap = snap_with("fabric", Some("server"));
         let lock = lock_with("fabric", &["x.jar"]);
-        // Should not error even though .mc-snap/server does not exist.
-        clean_stale_artifacts(&layout, &lock).unwrap();
+        clean_stale_artifacts(&layout, &snap, &lock).unwrap();
+    }
+
+    #[test]
+    fn cleans_artifacts_in_subdir_when_location_set() {
+        let td = TempDir::new().unwrap();
+        let layout = ProjectLayout::at(td.path().to_path_buf());
+        let snap = snap_with("fabric", Some("server"));
+        let sdir = layout.server_dir_for(&snap);
+        assert_eq!(sdir, td.path().join("server"));
+        let mods = sdir.join("mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        std::fs::write(mods.join("fabric-api.jar"), b"keep").unwrap();
+        std::fs::write(mods.join("oldmod.jar"), b"stale").unwrap();
+
+        let lock = lock_with("fabric", &["fabric-api.jar"]);
+        clean_stale_artifacts(&layout, &snap, &lock).unwrap();
+
+        assert!(mods.join("fabric-api.jar").exists());
+        assert!(!mods.join("oldmod.jar").exists());
+        assert!(
+            !td.path().join(".mc-snap").join("server").exists(),
+            "no legacy .mc-snap/server dir should be created"
+        );
     }
 }
 

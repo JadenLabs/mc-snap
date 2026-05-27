@@ -96,6 +96,11 @@ pub async fn run(
     std::fs::write(&target, &body)?;
     ensure_gitignore(&cwd)?;
 
+    let written_location = crate::yml::Snap::from_str(&body)
+        .ok()
+        .and_then(|s| s.server.location);
+    print_gitignore_hint(written_location.as_deref());
+
     println!();
     println!("\x1b[1;32m✓\x1b[0m created \x1b[1m{}\x1b[0m", target.display());
     println!(
@@ -103,6 +108,43 @@ pub async fn run(
     );
     println!("        then run \x1b[1mmc-snap install\x1b[0m");
     Ok(())
+}
+
+fn print_gitignore_hint(location: Option<&str>) {
+    let prefix = match location {
+        Some(sub) if !sub.trim().is_empty() && sub.trim() != "." => {
+            format!("{}/", sub.trim().trim_end_matches('/'))
+        }
+        _ => String::new(),
+    };
+    println!();
+    println!(
+        "\x1b[2m  hint: server artifacts will land at {}\x1b[0m",
+        if prefix.is_empty() {
+            "the project root".to_string()
+        } else {
+            format!("./{prefix}")
+        }
+    );
+    println!("\x1b[2m        consider adding to .gitignore:\x1b[0m");
+    for entry in [
+        "world/",
+        "world_nether/",
+        "world_the_end/",
+        "logs/",
+        "crash-reports/",
+        "mods/",
+        "*.jar",
+        "server.properties",
+        "eula.txt",
+        "usercache.json",
+        "ops.json",
+        "banned-players.json",
+        "banned-ips.json",
+        "whitelist.json",
+    ] {
+        println!("\x1b[2m          {prefix}{entry}\x1b[0m");
+    }
 }
 
 fn print_detection_summary(d: &Detected, no_mod_resolve: bool) {
@@ -202,6 +244,15 @@ fn wizard(cwd: &Path, detected: Option<&Detected>) -> Result<String> {
         .with_help_message("fabric supports mods; vanilla is mod-free")
         .prompt()?;
 
+    let loc_default = detected
+        .and_then(|d| d.detected_location.clone())
+        .unwrap_or_else(|| ".".to_string());
+    let location_input = Text::new("Server directory")
+        .with_default(&loc_default)
+        .with_help_message("'.' for current directory, or a subdir like 'server'")
+        .prompt()?;
+    let location = normalize_location(&location_input);
+
     let java_default = detected.and_then(|d| d.java_major).unwrap_or(26);
     let java = CustomType::<u32>::new("Java version")
         .with_default(java_default)
@@ -283,12 +334,22 @@ fn wizard(cwd: &Path, detected: Option<&Detected>) -> Result<String> {
         &description,
         &minecraft,
         loader,
+        location.as_deref(),
         java,
         &memory,
         &mods,
         &props,
         eula,
     ))
+}
+
+fn normalize_location(s: &str) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() || t == "." {
+        None
+    } else {
+        Some(t.to_string())
+    }
 }
 
 fn render_from_detected(cwd: &Path, d: &Detected) -> String {
@@ -320,6 +381,7 @@ fn render_from_detected(cwd: &Path, d: &Detected) -> String {
         &description,
         &minecraft,
         loader,
+        d.detected_location.as_deref(),
         java,
         &memory,
         &d.mods,
@@ -338,6 +400,7 @@ fn render_yml(
     description: &str,
     minecraft: &str,
     loader: &str,
+    location: Option<&str>,
     java: u32,
     memory: &str,
     mods: &[ModEntry],
@@ -354,6 +417,9 @@ fn render_yml(
         out.push_str(&format!("  description: {}\n", yaml_scalar(description)));
     }
     out.push_str(&format!("  minecraft: {}\n", yaml_scalar(minecraft)));
+    if let Some(loc) = location {
+        out.push_str(&format!("  location: {}\n", yaml_scalar(loc)));
+    }
     out.push_str("  loader:\n");
     out.push_str(&format!("    type: {loader}\n"));
     out.push('\n');
@@ -488,6 +554,7 @@ mod tests {
             "the grimwald smp",
             "26.1.2",
             "fabric",
+            None,
             26,
             "4G",
             &mods,
@@ -501,6 +568,7 @@ mod tests {
         assert_eq!(snap.runtime.java, Some(26));
         assert_eq!(snap.mods.len(), 1);
         assert!(snap.eula);
+        assert!(snap.server.location.is_none());
     }
 
     #[test]
@@ -511,6 +579,7 @@ mod tests {
             "",
             "26.1.2",
             "vanilla",
+            None,
             26,
             "2G",
             &[],
@@ -539,6 +608,7 @@ mod tests {
             "has # hash",
             "26.1.2",
             "fabric",
+            None,
             26,
             "4G",
             &[],
@@ -547,6 +617,45 @@ mod tests {
         );
         let snap = Snap::from_str(&body).unwrap();
         assert_eq!(snap.server.name, "weird:name");
+    }
+
+    #[test]
+    fn renders_location_when_present() {
+        let props = props_with("hi", 20);
+        let body = render_yml(
+            "s",
+            "",
+            "26.1.2",
+            "vanilla",
+            Some("server"),
+            26,
+            "2G",
+            &[],
+            &props,
+            true,
+        );
+        let snap = Snap::from_str(&body).unwrap();
+        assert_eq!(snap.server.location.as_deref(), Some("server"));
+    }
+
+    #[test]
+    fn omits_location_when_none() {
+        let props = props_with("hi", 20);
+        let body = render_yml(
+            "s",
+            "",
+            "26.1.2",
+            "vanilla",
+            None,
+            26,
+            "2G",
+            &[],
+            &props,
+            true,
+        );
+        assert!(!body.contains("location:"));
+        let snap = Snap::from_str(&body).unwrap();
+        assert!(snap.server.location.is_none());
     }
 
     #[test]
@@ -569,7 +678,7 @@ mod tests {
         }];
         let props = props_with("hi", 20);
         let body = render_yml(
-            "s", "", "26.1.2", "vanilla", 26, "2G", &mods, &props, false,
+            "s", "", "26.1.2", "vanilla", None, 26, "2G", &mods, &props, false,
         );
         let snap = Snap::from_str(&body).unwrap();
         assert_eq!(snap.mods.len(), 1);
@@ -591,7 +700,7 @@ mod tests {
             Value::String("hello".into()),
         );
         let body = render_yml(
-            "s", "", "26.1.2", "vanilla", 26, "2G", &[], &props, false,
+            "s", "", "26.1.2", "vanilla", None, 26, "2G", &[], &props, false,
         );
         let snap = Snap::from_str(&body).unwrap();
         let saved = &snap.config.server_properties;

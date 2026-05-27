@@ -2,6 +2,8 @@ use anyhow::Context;
 use directories::ProjectDirs;
 use std::path::{Path, PathBuf};
 
+use crate::yml::Snap;
+
 #[derive(Debug, Clone)]
 pub struct ProjectLayout {
     pub root: PathBuf,
@@ -37,8 +39,18 @@ impl ProjectLayout {
     pub fn snap_dir(&self) -> PathBuf {
         self.root.join(".mc-snap")
     }
-    pub fn server_dir(&self) -> PathBuf {
-        self.snap_dir().join("server")
+    /// Resolve the server materialization directory from the optional
+    /// `server.location` field. `None`, empty, or "." means surface-level
+    /// (project root, alongside mc-snap.yml).
+    pub fn server_dir(&self, location: Option<&str>) -> PathBuf {
+        match location.map(str::trim) {
+            None | Some("") | Some(".") => self.root.clone(),
+            Some(sub) => self.root.join(sub),
+        }
+    }
+
+    pub fn server_dir_for(&self, snap: &Snap) -> PathBuf {
+        self.server_dir(snap.server.location.as_deref())
     }
     pub fn state_file(&self) -> PathBuf {
         self.snap_dir().join("state.json")
@@ -75,5 +87,37 @@ impl GlobalDirs {
         std::fs::create_dir_all(&self.cache)?;
         std::fs::create_dir_all(&self.jdks)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_dir_none_is_root() {
+        let layout = ProjectLayout::at(PathBuf::from("/srv/mc"));
+        assert_eq!(layout.server_dir(None), PathBuf::from("/srv/mc"));
+    }
+
+    #[test]
+    fn server_dir_dot_is_root() {
+        let layout = ProjectLayout::at(PathBuf::from("/srv/mc"));
+        assert_eq!(layout.server_dir(Some(".")), PathBuf::from("/srv/mc"));
+    }
+
+    #[test]
+    fn server_dir_empty_is_root() {
+        let layout = ProjectLayout::at(PathBuf::from("/srv/mc"));
+        assert_eq!(layout.server_dir(Some("")), PathBuf::from("/srv/mc"));
+    }
+
+    #[test]
+    fn server_dir_subdir_joins_root() {
+        let layout = ProjectLayout::at(PathBuf::from("/srv/mc"));
+        assert_eq!(
+            layout.server_dir(Some("server")),
+            PathBuf::from("/srv/mc/server")
+        );
     }
 }

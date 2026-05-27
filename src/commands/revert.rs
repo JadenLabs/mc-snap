@@ -55,8 +55,8 @@ pub async fn run(id: Option<String>, list: bool) -> Result<()> {
     let snap = Snap::from_path(&layout.yml())?;
     let lock = crate::lock::Lock::from_path(&layout.lock())?;
 
-    if layout.server_dir().is_dir() {
-        orchestrate::clean_stale_artifacts(&layout, &lock)?;
+    if layout.server_dir_for(&snap).is_dir() {
+        orchestrate::clean_stale_artifacts(&layout, &snap, &lock)?;
     }
     orchestrate::materialize(&layout, &snap, &lock).await?;
 
