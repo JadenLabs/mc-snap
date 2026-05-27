@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Cargo tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run cargo tests
+        run: cargo test --all-targets
+
+  e2e:
+    name: End-to-end tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '26'
+
+      - name: Cache mc-snap jar store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/mc-snap
+          key: mc-snap-jars-${{ runner.os }}-${{ hashFiles('scripts/e2e.sh') }}
+          restore-keys: |
+            mc-snap-jars-${{ runner.os }}-
+
+      - name: Run e2e suite
+        run: chmod +x scripts/e2e.sh && ./scripts/e2e.sh
