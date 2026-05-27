@@ -223,7 +223,7 @@ The 26.x series is the current default. Concretely, supporting it meant:
 - **No unpinned downloads.** Every artifact is hashed. URL mods require a user-supplied `sha256`. Modrinth files are verified against the API's published `sha512` before they hit the cache; the lockfile sha256 is computed from the same verified bytes. The Mojang server jar is verified against the manifest's `sha1`. The Adoptium JDK download is verified against the published sha256 fetched from `/v3/checksum/latest/...` before extraction.
 - **Atomic writes.** Cache files, lockfile, yml, snapshots, and pid file are all written via tmp+rename so a crash mid-write can't leave a half-formed file the next run trips over.
 - **Zip extraction is path-validated.** `unpack` and the JDK extractor both walk archive entries by hand, rejecting absolute paths, `..` components, and symlink entries; output paths are canonicalized and asserted to stay under the destination.
-- **RCON secret hygiene.** 32 bytes from `OsRng`, hex-encoded. Written 0600 on Unix. `rcon.ip` is force-set to `127.0.0.1` on every install — the password is plaintext on the wire so we never let it listen externally.
+- **RCON secret hygiene.** 32 bytes from `OsRng`, hex-encoded. Written 0600 on Unix. `rcon.ip` is force-set to `127.0.0.1` on every install - the password is plaintext on the wire so we never let it listen externally.
 - **Project advisory lock.** A `fs2` exclusive lock on `.mc-snap/.lock` serializes mutating commands (install / update / start / stop / revert) so two runs can't stomp each other's yml + server dir.
 - **Download caps.** The reqwest client has bounded redirects (5) and total/connect timeouts. Streamed downloads abort if they exceed a hard size cap.
 
