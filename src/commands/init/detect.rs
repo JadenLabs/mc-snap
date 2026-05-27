@@ -117,7 +117,7 @@ fn glob_first(dir: &Path, prefix: &str) -> Option<PathBuf> {
 }
 
 fn detect_loader_and_version(root: &Path, d: &mut Detected) {
-    // Fabric detection first — the launcher.properties points at the embedded vanilla jar.
+    // Fabric detection first - the launcher.properties points at the embedded vanilla jar.
     let launcher_props = root.join("fabric-server-launcher.properties");
     let fabric_launch = root.join("fabric-server-launch.jar");
     if launcher_props.is_file() || fabric_launch.is_file() {

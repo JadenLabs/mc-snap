@@ -123,7 +123,7 @@ pub async fn run(
         }
     }
 
-    // Resolve the full new lockfile up front — this hits the network for the loader
+    // Resolve the full new lockfile up front - this hits the network for the loader
     // jar and every mod, populating the cache. If anything blows up, we have NOT
     // touched the user's yml/lock/server yet.
     println!("resolving new lockfile...");

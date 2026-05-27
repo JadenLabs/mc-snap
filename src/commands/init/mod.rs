@@ -53,7 +53,7 @@ pub async fn run(
         } else if interactive {
             inquire::set_global_render_config(render_config());
             let ok = Confirm::new(&format!(
-                "mc-snap.yml exists at {} — overwrite?",
+                "mc-snap.yml exists at {} - overwrite?",
                 target.display()
             ))
             .with_default(false)
@@ -76,7 +76,7 @@ pub async fn run(
         }
         println!();
         println!(
-            "\x1b[1;36m  mc-snap\x1b[0m \x1b[2m— detecting in {}\x1b[0m",
+            "\x1b[1;36m  mc-snap\x1b[0m \x1b[2m- detecting in {}\x1b[0m",
             root.display()
         );
         let d = detect::detect(&root, !no_mod_resolve).await?;
@@ -152,7 +152,7 @@ fn print_detection_summary(d: &Detected, no_mod_resolve: bool) {
     let warn = "\x1b[1;33m!\x1b[0m";
     if let Some(unsup) = d.unsupported_loader {
         println!(
-            "  {warn} detected {} server — mc-snap currently supports only vanilla and fabric",
+            "  {warn} detected {} server - mc-snap currently supports only vanilla and fabric",
             unsup
         );
     }
@@ -213,7 +213,7 @@ fn wizard(cwd: &Path, detected: Option<&Detected>) -> Result<String> {
         .unwrap_or_else(|| "my-server".to_string());
 
     println!();
-    println!("\x1b[1;36m  mc-snap\x1b[0m \x1b[2m— new server config\x1b[0m");
+    println!("\x1b[1;36m  mc-snap\x1b[0m \x1b[2m- new server config\x1b[0m");
     println!("\x1b[2m  arrow keys to navigate, enter to confirm, ctrl-c to cancel\x1b[0m");
     println!();
 
@@ -288,7 +288,7 @@ fn wizard(cwd: &Path, detected: Option<&Detected>) -> Result<String> {
         .with_error_message("enter a positive integer")
         .prompt()?;
 
-    // If detection already found a mod list, don't ask about fabric-api again — keep what we found.
+    // If detection already found a mod list, don't ask about fabric-api again - keep what we found.
     let detected_has_mods = detected.is_some_and(|d| !d.mods.is_empty());
     let include_fabric_api = if loader == "fabric" && !detected_has_mods {
         Confirm::new("Include fabric-api?")
@@ -303,7 +303,7 @@ fn wizard(cwd: &Path, detected: Option<&Detected>) -> Result<String> {
     let eula = Confirm::new("Accept the Minecraft EULA?")
         .with_default(eula_default)
         .with_help_message(
-            "https://www.minecraft.net/en-us/eula — required before starting the server",
+            "https://www.minecraft.net/en-us/eula - required before starting the server",
         )
         .prompt()?;
 
