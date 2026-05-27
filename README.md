@@ -132,12 +132,12 @@ Global cache shared across servers: `~/.local/share/mc-snap/{cache,jdks}/` on Li
 
 ## RCON
 
-`install` auto-generates a 256-bit RCON password in `.mc-snap/rcon.secret` (mode 0600 on Unix) and writes `enable-rcon=true`, `rcon.password=<secret>`, and `rcon.ip=127.0.0.1` into `server.properties`. `stop`, `status`, and `console` all use this. RCON is plaintext, so we always bind it to loopback — the `rcon.ip` override in your yml is overwritten on every install for that reason.
+`install` auto-generates a 256-bit RCON password in `.mc-snap/rcon.secret` (mode 0600 on Unix) and writes `enable-rcon=true`, `rcon.password=<secret>`, and `rcon.ip=127.0.0.1` into `server.properties`. `stop`, `status`, and `console` all use this. RCON is plaintext, so we always bind it to loopback - the `rcon.ip` override in your yml is overwritten on every install for that reason.
 
 ## Development
 
 ```bash
-make build       # cargo build (debug — use `cargo build --release` for an optimized binary)
+make build       # cargo build (debug - use `cargo build --release` for an optimized binary)
 make unit        # cargo test --all-targets (unit + wiremock integration)
 make e2e         # full lifecycle against a real Fabric server in .dev-servers/
 make all         # unit + e2e
