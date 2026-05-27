@@ -102,27 +102,20 @@ pub fn cached_temurin(jdks_root: &Path, major: u32) -> Option<JavaInstall> {
 
 pub async fn download_temurin(jdks_root: &Path, major: u32) -> anyhow::Result<JavaInstall> {
     let (os, arch, image_type, archive_ext) = adoptium_target()?;
-    let url = format!(
-        "https://api.adoptium.net/v3/binary/latest/{major}/ga/{os}/{arch}/{image_type}/hotspot/normal/eclipse"
-    );
-    let checksum_url = format!(
-        "https://api.adoptium.net/v3/checksum/latest/{major}/ga/{os}/{arch}/{image_type}/hotspot/normal/eclipse"
-    );
     let target = jdks_root.join(major.to_string()).join(format!("{os}-{arch}"));
     std::fs::create_dir_all(&target)?;
 
     let client = reqwest::Client::builder()
         .user_agent(concat!("mc-snap/", env!("CARGO_PKG_VERSION")))
-        .redirect(reqwest::redirect::Policy::limited(5))
+        .redirect(reqwest::redirect::Policy::limited(10))
         .timeout(std::time::Duration::from_secs(300))
         .connect_timeout(std::time::Duration::from_secs(15))
         .build()?;
 
-    // Fetch the published checksum first so we can verify the binary before we ever
-    // trust its contents (extract, scan paths, etc).
-    let want_sha256 = fetch_adoptium_sha256(&client, &checksum_url)
-        .await
-        .with_context(|| format!("fetching adoptium checksum from {checksum_url}"))?;
+    // Use the assets API to get both download URL and checksum in one request,
+    // avoiding the unreliable /v3/checksum/latest/ endpoint.
+    let (url, want_sha256) =
+        fetch_adoptium_asset(&client, major, os, arch, image_type).await?;
 
     let bytes = client
         .get(&url)
@@ -157,24 +150,52 @@ pub async fn download_temurin(jdks_root: &Path, major: u32) -> anyhow::Result<Ja
     Ok(JavaInstall { bin, major })
 }
 
-async fn fetch_adoptium_sha256(client: &reqwest::Client, url: &str) -> anyhow::Result<String> {
-    // The checksum endpoint redirects to a .sha256.txt file with body "<hex>  <filename>".
-    let body = client
-        .get(url)
+async fn fetch_adoptium_asset(
+    client: &reqwest::Client,
+    major: u32,
+    os: &str,
+    arch: &str,
+    image_type: &str,
+) -> anyhow::Result<(String, String)> {
+    let url = format!(
+        "https://api.adoptium.net/v3/assets/latest/{major}/hotspot\
+         ?os={os}&architecture={arch}&image_type={image_type}\
+         &release_type=ga&jvm_impl=hotspot&vendor=eclipse&heap_size=normal"
+    );
+
+    let json: serde_json::Value = client
+        .get(&url)
         .send()
         .await?
-        .error_for_status()?
-        .text()
+        .error_for_status()
+        .with_context(|| format!("fetching adoptium asset listing from {url}"))?
+        .json()
         .await?;
-    let hash = body
-        .split_whitespace()
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("empty checksum response from {url}"))?
+
+    let package = json
+        .as_array()
+        .and_then(|a| a.first())
+        .and_then(|v| v.get("binary"))
+        .and_then(|b| b.get("package"))
+        .ok_or_else(|| anyhow::anyhow!("no asset found in adoptium response for java {major}"))?;
+
+    let link = package
+        .get("link")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing link in adoptium asset response"))?
+        .to_string();
+
+    let checksum = package
+        .get("checksum")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing checksum in adoptium asset response"))?
         .to_lowercase();
-    if hash.len() != 64 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
-        anyhow::bail!("malformed adoptium checksum: {hash:?}");
+
+    if checksum.len() != 64 || !checksum.chars().all(|c| c.is_ascii_hexdigit()) {
+        anyhow::bail!("malformed adoptium checksum: {checksum:?}");
     }
-    Ok(hash)
+
+    Ok((link, checksum))
 }
 
 fn adoptium_target() -> anyhow::Result<(&'static str, &'static str, &'static str, &'static str)> {
