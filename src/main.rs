@@ -87,6 +87,21 @@ enum Cmd {
     },
     /// List newer mod versions available for the current Minecraft version.
     Search,
+    /// Manage tracked config files (e.g. mod configs under <server>/config).
+    Config {
+        #[command(subcommand)]
+        cmd: ConfigCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigCmd {
+    /// Scan the server's config/ directory and offer to track new files.
+    Detect {
+        /// Skip prompts and track every untracked config file.
+        #[arg(long)]
+        all: bool,
+    },
 }
 
 #[tokio::main]
@@ -122,5 +137,8 @@ async fn main() -> Result<()> {
         Cmd::Check { to } => commands::check::run(&to).await,
         Cmd::Updatable { to } => commands::updatable::run(to).await,
         Cmd::Search => commands::search::run().await,
+        Cmd::Config { cmd } => match cmd {
+            ConfigCmd::Detect { all } => commands::config::run_detect(all).await,
+        },
     }
 }

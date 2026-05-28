@@ -7,8 +7,10 @@ use serde_yml::{Mapping, Value};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use crate::yml::ModEntry;
+use crate::yml::{ConfigSection, FileRef, Loader, ModEntry, Runtime, Server, Snap};
 use detect::Detected;
+
+pub use detect::detect as detect_path;
 
 const TEMPLATE: &str = r#"schema: 1
 eula: false
@@ -329,7 +331,7 @@ fn wizard(cwd: &Path, detected: Option<&Detected>) -> Result<String> {
         Value::Number((max_players as i64).into()),
     );
 
-    Ok(render_yml(
+    let mut snap = build_snap(
         &name,
         &description,
         &minecraft,
@@ -340,7 +342,72 @@ fn wizard(cwd: &Path, detected: Option<&Detected>) -> Result<String> {
         &mods,
         &props,
         eula,
-    ))
+    );
+
+    if let Some(d) = detected {
+        snap.config.files = scan_and_select_configs(cwd, &snap, d)?;
+    }
+
+    Ok(render_yml(&snap))
+}
+
+fn scan_and_select_configs(
+    cwd: &Path,
+    snap: &Snap,
+    detected: &Detected,
+) -> Result<Vec<FileRef>> {
+    use crate::commands::config::{scan_config_dir, track_candidate};
+    use inquire::MultiSelect;
+
+    let server_dir = detected_server_dir(cwd, snap, detected);
+    let candidates = scan_config_dir(&server_dir).unwrap_or_default();
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    println!();
+    println!(
+        "\x1b[1;36m  config\x1b[0m \x1b[2m- found {} file(s) under {}/\x1b[0m",
+        candidates.len(),
+        server_dir.join("config").display()
+    );
+
+    let labels: Vec<String> = candidates.iter().map(|c| c.server_rel.clone()).collect();
+    let defaults: Vec<usize> = (0..labels.len()).collect();
+    let chosen = MultiSelect::new("Track which configs?", labels.clone())
+        .with_default(&defaults)
+        .with_help_message("space toggles, enter confirms - default tracks everything")
+        .prompt()?;
+
+    let chosen_set: std::collections::HashSet<&str> = chosen.iter().map(|s| s.as_str()).collect();
+    let mut out = Vec::with_capacity(chosen.len());
+    for c in &candidates {
+        if chosen_set.contains(c.server_rel.as_str()) {
+            out.push(track_candidate(cwd, c)?);
+        }
+    }
+    Ok(out)
+}
+
+fn scan_configs_all(cwd: &Path, snap: &Snap, detected: &Detected) -> Result<Vec<FileRef>> {
+    use crate::commands::config::{scan_config_dir, track_candidate};
+    let server_dir = detected_server_dir(cwd, snap, detected);
+    let candidates = scan_config_dir(&server_dir).unwrap_or_default();
+    let mut out = Vec::with_capacity(candidates.len());
+    for c in &candidates {
+        out.push(track_candidate(cwd, c)?);
+    }
+    Ok(out)
+}
+
+fn detected_server_dir(cwd: &Path, snap: &Snap, detected: &Detected) -> PathBuf {
+    if let Some(loc) = detected.detected_location.as_deref() {
+        return cwd.join(loc);
+    }
+    match snap.server.location.as_deref() {
+        Some(sub) if !sub.trim().is_empty() && sub.trim() != "." => cwd.join(sub),
+        _ => cwd.to_path_buf(),
+    }
 }
 
 fn normalize_location(s: &str) -> Option<String> {
@@ -376,7 +443,7 @@ fn render_from_detected(cwd: &Path, d: &Detected) -> String {
         set_prop(&mut props, "max-players", Value::Number(20i64.into()));
     }
 
-    render_yml(
+    let mut snap = build_snap(
         &name,
         &description,
         &minecraft,
@@ -387,55 +454,69 @@ fn render_from_detected(cwd: &Path, d: &Detected) -> String {
         &d.mods,
         &props,
         d.eula,
-    )
+    );
+    snap.config.files = scan_configs_all(cwd, &snap, d).unwrap_or_default();
+    render_yml(&snap)
 }
 
 fn set_prop(m: &mut Mapping, key: &str, value: Value) {
     m.insert(Value::String(key.to_string()), value);
 }
 
-#[allow(clippy::too_many_arguments)]
-fn render_yml(
-    name: &str,
-    description: &str,
-    minecraft: &str,
-    loader: &str,
-    location: Option<&str>,
-    java: u32,
-    memory: &str,
-    mods: &[ModEntry],
-    server_properties: &Mapping,
-    eula: bool,
-) -> String {
+pub fn render_yml(snap: &Snap) -> String {
     let mut out = String::new();
-    out.push_str("schema: 1\n");
-    out.push_str(&format!("eula: {eula}\n\n"));
+    out.push_str(&format!("schema: {}\n", snap.schema));
+    out.push_str(&format!("eula: {}\n\n", snap.eula));
 
     out.push_str("server:\n");
-    out.push_str(&format!("  name: {}\n", yaml_scalar(name)));
-    if !description.trim().is_empty() {
-        out.push_str(&format!("  description: {}\n", yaml_scalar(description)));
+    out.push_str(&format!("  name: {}\n", yaml_scalar(&snap.server.name)));
+    if let Some(desc) = snap.server.description.as_deref() {
+        if !desc.trim().is_empty() {
+            out.push_str(&format!("  description: {}\n", yaml_scalar(desc)));
+        }
     }
-    out.push_str(&format!("  minecraft: {}\n", yaml_scalar(minecraft)));
-    if let Some(loc) = location {
+    out.push_str(&format!(
+        "  minecraft: {}\n",
+        yaml_scalar(&snap.server.minecraft)
+    ));
+    if let Some(loc) = snap.server.location.as_deref() {
         out.push_str(&format!("  location: {}\n", yaml_scalar(loc)));
     }
     out.push_str("  loader:\n");
-    out.push_str(&format!("    type: {loader}\n"));
+    out.push_str(&format!(
+        "    type: {}\n",
+        yaml_scalar(&snap.server.loader.kind)
+    ));
+    if let Some(v) = snap.server.loader.version.as_deref() {
+        out.push_str(&format!("    version: {}\n", yaml_scalar(v)));
+    }
+    if let Some(v) = snap.server.loader.installer.as_deref() {
+        out.push_str(&format!("    installer: {}\n", yaml_scalar(v)));
+    }
     out.push('\n');
 
     out.push_str("runtime:\n");
-    out.push_str(&format!("  java: {java}\n"));
-    out.push_str(&format!("  memory: {}\n", yaml_scalar(memory)));
-    out.push_str("  flags:\n");
-    out.push_str("    - -XX:+UseG1GC\n");
+    if let Some(j) = snap.runtime.java {
+        out.push_str(&format!("  java: {j}\n"));
+    }
+    if let Some(mem) = snap.runtime.memory.as_deref() {
+        out.push_str(&format!("  memory: {}\n", yaml_scalar(mem)));
+    }
+    if snap.runtime.flags.is_empty() {
+        out.push_str("  flags:\n    - -XX:+UseG1GC\n");
+    } else {
+        out.push_str("  flags:\n");
+        for f in &snap.runtime.flags {
+            out.push_str(&format!("    - {}\n", yaml_scalar(f)));
+        }
+    }
     out.push('\n');
 
-    if mods.is_empty() {
+    if snap.mods.is_empty() {
         out.push_str("mods: []\n\n");
     } else {
         out.push_str("mods:\n");
-        for entry in mods {
+        for entry in &snap.mods {
             match entry {
                 ModEntry::Registry { id, provider, version } => {
                     out.push_str(&format!("  - id: {}\n", yaml_scalar(id)));
@@ -457,12 +538,66 @@ fn render_yml(
 
     out.push_str("config:\n");
     out.push_str("  server.properties:\n");
-    for (k, v) in server_properties.iter() {
+    for (k, v) in snap.config.server_properties.iter() {
         let key = k.as_str().unwrap_or_default();
         out.push_str(&format!("    {}: {}\n", yaml_scalar(key), render_value(v)));
     }
+    if !snap.config.files.is_empty() {
+        out.push_str("  files:\n");
+        for f in &snap.config.files {
+            out.push_str(&format!(
+                "    - {{ src: {}, dst: {} }}\n",
+                yaml_scalar(&f.src),
+                yaml_scalar(&f.dst)
+            ));
+        }
+    }
 
     out
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_snap(
+    name: &str,
+    description: &str,
+    minecraft: &str,
+    loader: &str,
+    location: Option<&str>,
+    java: u32,
+    memory: &str,
+    mods: &[ModEntry],
+    server_properties: &Mapping,
+    eula: bool,
+) -> Snap {
+    Snap {
+        schema: 1,
+        eula,
+        server: Server {
+            name: name.to_string(),
+            description: if description.trim().is_empty() {
+                None
+            } else {
+                Some(description.to_string())
+            },
+            minecraft: minecraft.to_string(),
+            loader: Loader {
+                kind: loader.to_string(),
+                version: None,
+                installer: None,
+            },
+            location: location.map(|s| s.to_string()),
+        },
+        runtime: Runtime {
+            java: Some(java),
+            memory: Some(memory.to_string()),
+            flags: vec![],
+        },
+        mods: mods.to_vec(),
+        config: ConfigSection {
+            server_properties: server_properties.clone(),
+            files: vec![],
+        },
+    }
 }
 
 fn render_value(v: &Value) -> String {
@@ -541,6 +676,24 @@ mod tests {
     use super::*;
     use crate::yml::Snap;
 
+    fn r(
+        name: &str,
+        desc: &str,
+        mc: &str,
+        loader: &str,
+        location: Option<&str>,
+        java: u32,
+        mem: &str,
+        mods: &[ModEntry],
+        props: &Mapping,
+        eula: bool,
+    ) -> String {
+        let snap = build_snap(
+            name, desc, mc, loader, location, java, mem, mods, props, eula,
+        );
+        render_yml(&snap)
+    }
+
     #[test]
     fn rendered_yml_parses_and_round_trips() {
         let mods = vec![ModEntry::Registry {
@@ -549,18 +702,7 @@ mod tests {
             version: "latest".into(),
         }];
         let props = props_with("welcome!", 20);
-        let body = render_yml(
-            "grimwald",
-            "the grimwald smp",
-            "26.1.2",
-            "fabric",
-            None,
-            26,
-            "4G",
-            &mods,
-            &props,
-            true,
-        );
+        let body = r("grimwald", "the grimwald smp", "26.1.2", "fabric", None, 26, "4G", &mods, &props, true);
         let snap = Snap::from_str(&body).unwrap();
         assert_eq!(snap.server.name, "grimwald");
         assert_eq!(snap.server.minecraft, "26.1.2");
@@ -574,18 +716,7 @@ mod tests {
     #[test]
     fn vanilla_without_mods_has_empty_mods() {
         let props = props_with("hi", 10);
-        let body = render_yml(
-            "vanilla-svr",
-            "",
-            "26.1.2",
-            "vanilla",
-            None,
-            26,
-            "2G",
-            &[],
-            &props,
-            false,
-        );
+        let body = r("vanilla-svr", "", "26.1.2", "vanilla", None, 26, "2G", &[], &props, false);
         let snap = Snap::from_str(&body).unwrap();
         assert_eq!(snap.server.loader.kind, "vanilla");
         assert!(snap.mods.is_empty());
@@ -603,18 +734,7 @@ mod tests {
             Value::String("max-players".into()),
             Value::Number(20i64.into()),
         );
-        let body = render_yml(
-            "weird:name",
-            "has # hash",
-            "26.1.2",
-            "fabric",
-            None,
-            26,
-            "4G",
-            &[],
-            &props,
-            false,
-        );
+        let body = r("weird:name", "has # hash", "26.1.2", "fabric", None, 26, "4G", &[], &props, false);
         let snap = Snap::from_str(&body).unwrap();
         assert_eq!(snap.server.name, "weird:name");
     }
@@ -622,18 +742,7 @@ mod tests {
     #[test]
     fn renders_location_when_present() {
         let props = props_with("hi", 20);
-        let body = render_yml(
-            "s",
-            "",
-            "26.1.2",
-            "vanilla",
-            Some("server"),
-            26,
-            "2G",
-            &[],
-            &props,
-            true,
-        );
+        let body = r("s", "", "26.1.2", "vanilla", Some("server"), 26, "2G", &[], &props, true);
         let snap = Snap::from_str(&body).unwrap();
         assert_eq!(snap.server.location.as_deref(), Some("server"));
     }
@@ -641,18 +750,7 @@ mod tests {
     #[test]
     fn omits_location_when_none() {
         let props = props_with("hi", 20);
-        let body = render_yml(
-            "s",
-            "",
-            "26.1.2",
-            "vanilla",
-            None,
-            26,
-            "2G",
-            &[],
-            &props,
-            true,
-        );
+        let body = r("s", "", "26.1.2", "vanilla", None, 26, "2G", &[], &props, true);
         assert!(!body.contains("location:"));
         let snap = Snap::from_str(&body).unwrap();
         assert!(snap.server.location.is_none());
@@ -677,9 +775,7 @@ mod tests {
             filename: Some("x.jar".into()),
         }];
         let props = props_with("hi", 20);
-        let body = render_yml(
-            "s", "", "26.1.2", "vanilla", None, 26, "2G", &mods, &props, false,
-        );
+        let body = r("s", "", "26.1.2", "vanilla", None, 26, "2G", &mods, &props, false);
         let snap = Snap::from_str(&body).unwrap();
         assert_eq!(snap.mods.len(), 1);
     }
@@ -691,26 +787,48 @@ mod tests {
             Value::String("max-players".into()),
             Value::Number(20i64.into()),
         );
-        props.insert(
-            Value::String("online-mode".into()),
-            Value::Bool(true),
-        );
+        props.insert(Value::String("online-mode".into()), Value::Bool(true));
         props.insert(
             Value::String("motd".into()),
             Value::String("hello".into()),
         );
-        let body = render_yml(
-            "s", "", "26.1.2", "vanilla", None, 26, "2G", &[], &props, false,
-        );
+        let body = r("s", "", "26.1.2", "vanilla", None, 26, "2G", &[], &props, false);
         let snap = Snap::from_str(&body).unwrap();
         let saved = &snap.config.server_properties;
         assert_eq!(
             saved[Value::String("max-players".into())],
             Value::Number(20i64.into())
         );
-        assert_eq!(
-            saved[Value::String("online-mode".into())],
-            Value::Bool(true)
-        );
+        assert_eq!(saved[Value::String("online-mode".into())], Value::Bool(true));
+    }
+
+    #[test]
+    fn renders_config_files_block() {
+        let props = props_with("hi", 20);
+        let mut snap = build_snap("s", "", "26.1.2", "vanilla", None, 26, "2G", &[], &props, false);
+        snap.config.files = vec![
+            crate::yml::FileRef {
+                src: "configs/chunky.toml".into(),
+                dst: "config/chunky.toml".into(),
+            },
+        ];
+        let body = render_yml(&snap);
+        assert!(body.contains("files:"));
+        let parsed = Snap::from_str(&body).unwrap();
+        assert_eq!(parsed.config.files.len(), 1);
+        assert_eq!(parsed.config.files[0].src, "configs/chunky.toml");
+        assert_eq!(parsed.config.files[0].dst, "config/chunky.toml");
+    }
+
+    #[test]
+    fn round_trips_loader_version_and_flags() {
+        let props = props_with("hi", 20);
+        let mut snap = build_snap("s", "", "26.1.2", "fabric", None, 26, "2G", &[], &props, true);
+        snap.server.loader.version = Some("0.16.9".into());
+        snap.runtime.flags = vec!["-XX:+UseG1GC".into(), "-XX:+ParallelRefProcEnabled".into()];
+        let body = render_yml(&snap);
+        let parsed = Snap::from_str(&body).unwrap();
+        assert_eq!(parsed.server.loader.version.as_deref(), Some("0.16.9"));
+        assert_eq!(parsed.runtime.flags.len(), 2);
     }
 }

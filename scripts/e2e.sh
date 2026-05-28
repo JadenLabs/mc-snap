@@ -99,6 +99,9 @@ mods:
   - id: fabric-api
     provider: modrinth
     version: latest
+  - id: chunky
+    provider: modrinth
+    version: latest
 
 config:
   server.properties:
@@ -194,6 +197,34 @@ if [ "$stopped" -ne 1 ]; then
 fi
 green "server stopped"
 
+SROOT=$(server_root)
+step "verify mod-generated config exists"
+if ! ls "$SROOT/config/" 2>/dev/null | grep -qi chunky; then
+    red "chunky did not write a config in $SROOT/config/"
+    ls -la "$SROOT/config/" 2>/dev/null || true
+    exit 1
+fi
+green "found mod config in $SROOT/config/"
+
+step "config detect --all (track generated configs)"
+(cd "$TEST_DIR" && "$BIN" config detect --all)
+if ! ls "$TEST_DIR/configs/" 2>/dev/null | grep -qi chunky; then
+    red "config detect did not copy chunky config to $TEST_DIR/configs/"
+    ls -la "$TEST_DIR/configs/" 2>/dev/null || true
+    exit 1
+fi
+grep -q "^  files:" "$TEST_DIR/mc-snap.yml" || { red "yml is missing config.files block"; exit 1; }
+grep -q "config/" "$TEST_DIR/mc-snap.yml" || { red "yml is missing config/ destinations"; exit 1; }
+green "config files tracked in yml and copied to project"
+
+step "config detect --all (idempotent)"
+out=$(cd "$TEST_DIR" && "$BIN" config detect --all)
+echo "$out"
+echo "$out" | grep -q "already tracked" || { red "second config detect did not report no-op"; exit 1; }
+
+step "validate (after config.files added)"
+(cd "$TEST_DIR" && "$BIN" validate)
+
 step "check (compatibility report against current MC; should exit 0)"
 (cd "$TEST_DIR" && "$BIN" check --to "$MC_VERSION")
 
@@ -250,6 +281,12 @@ mkdir -p "$UNPACK_DIR"
 (cd "$UNPACK_DIR" && "$BIN" unpack "$BUNDLE")
 [ -f "$UNPACK_DIR/mc-snap.yml" ]  || { red "unpacked yml missing"; exit 1; }
 [ -f "$UNPACK_DIR/mc-snap.lock" ] || { red "unpacked lock missing"; exit 1; }
+
+if ! ls "$UNPACK_DIR/configs/" 2>/dev/null | grep -qi chunky; then
+    red "tracked config did not survive pack/unpack"
+    exit 1
+fi
+green "tracked config survived round trip"
 
 step "validate unpacked bundle"
 (cd "$UNPACK_DIR" && "$BIN" validate)
