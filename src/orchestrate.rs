@@ -136,7 +136,7 @@ fn write_properties(server_dir: &Path, snap: &Snap, layout: &ProjectLayout) -> R
         serde_yml::Value::String(password),
     );
     // Force RCON to bind to loopback regardless of what the user puts in their
-    // yml — Minecraft RCON is plaintext, so the password leaks if it listens
+    // yml - Minecraft RCON is plaintext, so the password leaks if it listens
     // externally. If a user genuinely needs remote admin they should tunnel.
     overrides.insert(
         "rcon.ip".into(),
