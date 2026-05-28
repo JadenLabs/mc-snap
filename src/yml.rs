@@ -1,6 +1,88 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+fn de_scalar_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct V;
+    impl<'de> Visitor<'de> for V {
+        type Value = String;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a string, number, or boolean")
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+        fn visit_string<E: de::Error>(self, v: String) -> Result<String, E> {
+            Ok(v)
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<String, E> {
+            Ok(format!("{:?}", v))
+        }
+        fn visit_bool<E: de::Error>(self, v: bool) -> Result<String, E> {
+            Ok(v.to_string())
+        }
+    }
+    deserializer.deserialize_any(V)
+}
+
+fn de_opt_scalar_as_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::{self, Visitor};
+    use std::fmt;
+
+    struct V;
+    impl<'de> Visitor<'de> for V {
+        type Value = Option<String>;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("an optional string, number, or boolean")
+        }
+        fn visit_none<E: de::Error>(self) -> Result<Option<String>, E> {
+            Ok(None)
+        }
+        fn visit_unit<E: de::Error>(self) -> Result<Option<String>, E> {
+            Ok(None)
+        }
+        fn visit_some<D2: serde::Deserializer<'de>>(
+            self,
+            d: D2,
+        ) -> Result<Option<String>, D2::Error> {
+            de_scalar_as_string(d).map(Some)
+        }
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Option<String>, E> {
+            Ok(Some(v.to_string()))
+        }
+        fn visit_string<E: de::Error>(self, v: String) -> Result<Option<String>, E> {
+            Ok(Some(v))
+        }
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Option<String>, E> {
+            Ok(Some(v.to_string()))
+        }
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Option<String>, E> {
+            Ok(Some(v.to_string()))
+        }
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<Option<String>, E> {
+            Ok(Some(format!("{:?}", v)))
+        }
+        fn visit_bool<E: de::Error>(self, v: bool) -> Result<Option<String>, E> {
+            Ok(Some(v.to_string()))
+        }
+    }
+    deserializer.deserialize_any(V)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Snap {
     pub schema: u32,
@@ -20,6 +102,7 @@ pub struct Server {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    #[serde(deserialize_with = "de_scalar_as_string")]
     pub minecraft: String,
     pub loader: Loader,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -30,9 +113,9 @@ pub struct Server {
 pub struct Loader {
     #[serde(rename = "type")]
     pub kind: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_scalar_as_string")]
     pub version: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_opt_scalar_as_string")]
     pub installer: Option<String>,
 }
 
@@ -52,7 +135,7 @@ pub enum ModEntry {
     Registry {
         id: String,
         provider: String,
-        #[serde(default = "default_version")]
+        #[serde(default = "default_version", deserialize_with = "de_scalar_as_string")]
         version: String,
     },
     Url {
@@ -228,5 +311,43 @@ mods:
     fn missing_location_defaults_to_none() {
         let snap = Snap::from_str(SAMPLE).unwrap();
         assert!(snap.server.location.is_none());
+    }
+
+    #[test]
+    fn coerces_numeric_scalars_to_string() {
+        let yml = r#"
+schema: 1
+server:
+  name: x
+  minecraft: 1.21
+  loader:
+    type: fabric
+    version: 0.16
+mods:
+  - id: better-multiplayer-sleep
+    provider: modrinth
+    version: 1.0
+  - id: chunky
+    provider: modrinth
+    version: 5
+  - id: example
+    provider: modrinth
+    version: true
+"#;
+        let snap = Snap::from_str(yml).unwrap();
+        assert_eq!(snap.server.minecraft, "1.21");
+        assert_eq!(snap.server.loader.version.as_deref(), Some("0.16"));
+        match &snap.mods[0] {
+            ModEntry::Registry { version, .. } => assert_eq!(version, "1.0"),
+            _ => panic!("expected Registry"),
+        }
+        match &snap.mods[1] {
+            ModEntry::Registry { version, .. } => assert_eq!(version, "5"),
+            _ => panic!("expected Registry"),
+        }
+        match &snap.mods[2] {
+            ModEntry::Registry { version, .. } => assert_eq!(version, "true"),
+            _ => panic!("expected Registry"),
+        }
     }
 }
