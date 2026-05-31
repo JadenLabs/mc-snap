@@ -9,6 +9,8 @@ pub struct Lock {
     #[serde(default, rename = "mods")]
     pub mods: Vec<LockMod>,
     #[serde(default)]
+    pub datapacks: Vec<LockMod>,
+    #[serde(default)]
     pub jdk: Option<LockJdk>,
 }
 
@@ -104,6 +106,14 @@ mod tests {
                 filename: "fabric-api.jar".into(),
                 url: "https://cdn.modrinth.com/x.jar".into(),
                 sha256: "c".repeat(64),
+            }],
+            datapacks: vec![LockMod {
+                id: "terralith".into(),
+                provider: "modrinth".into(),
+                version: "2.5.0".into(),
+                filename: "terralith.zip".into(),
+                url: "https://cdn.modrinth.com/dp.zip".into(),
+                sha256: "d".repeat(64),
             }],
             jdk: None,
         };

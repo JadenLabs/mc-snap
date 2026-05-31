@@ -3,7 +3,11 @@ use clap::{Parser, Subcommand};
 use mc_snap::commands;
 
 #[derive(Parser)]
-#[command(name = "mc-snap", version, about = "Declarative Minecraft server management")]
+#[command(
+    name = "mc-snap",
+    version,
+    about = "Declarative Minecraft server management"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -116,9 +120,12 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.cmd {
-        Cmd::Init { non_interactive, detect, force, no_mod_resolve } => {
-            commands::init::run(non_interactive, detect, force, no_mod_resolve).await
-        }
+        Cmd::Init {
+            non_interactive,
+            detect,
+            force,
+            no_mod_resolve,
+        } => commands::init::run(non_interactive, detect, force, no_mod_resolve).await,
         Cmd::Install => commands::install::run().await,
         Cmd::Validate => commands::validate::run().await,
         Cmd::Doctor => commands::doctor::run().await,
@@ -130,9 +137,12 @@ async fn main() -> Result<()> {
         Cmd::Console { command } => commands::console::run(command).await,
         Cmd::Pack { out } => commands::pack::run(&out).await,
         Cmd::Unpack { bundle } => commands::unpack::run(&bundle).await,
-        Cmd::Update { to, skip_missing, yes, loader } => {
-            commands::update::run(&to, skip_missing, yes, loader).await
-        }
+        Cmd::Update {
+            to,
+            skip_missing,
+            yes,
+            loader,
+        } => commands::update::run(&to, skip_missing, yes, loader).await,
         Cmd::Revert { id, list } => commands::revert::run(id, list).await,
         Cmd::Check { to } => commands::check::run(&to).await,
         Cmd::Updatable { to } => commands::updatable::run(to).await,

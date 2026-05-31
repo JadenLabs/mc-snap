@@ -1,6 +1,6 @@
-use async_trait::async_trait;
 use crate::yml::ModEntry;
 use crate::{ModProvider, ModSpec, ResolveEnv, ResolvedMod};
+use async_trait::async_trait;
 
 pub struct UrlProvider;
 
@@ -24,9 +24,12 @@ impl ModProvider for UrlProvider {
 
     async fn resolve(&self, spec: &ModSpec, _env: &ResolveEnv) -> anyhow::Result<ResolvedMod> {
         let (url, sha256, filename) = match &spec.0 {
-            ModEntry::Url { url, sha256, filename, .. } => {
-                (url.clone(), sha256.clone(), filename.clone())
-            }
+            ModEntry::Url {
+                url,
+                sha256,
+                filename,
+                ..
+            } => (url.clone(), sha256.clone(), filename.clone()),
             ModEntry::Registry { .. } => {
                 anyhow::bail!("url provider cannot resolve registry entries")
             }

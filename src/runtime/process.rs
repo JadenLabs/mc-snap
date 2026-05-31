@@ -59,7 +59,9 @@ fn read_token(pid_file: &Path) -> Option<String> {
     let s = std::fs::read_to_string(pid_file).ok()?;
     let mut it = s.lines();
     it.next()?; // pid
-    it.next().map(|l| l.trim().to_string()).filter(|s| !s.is_empty())
+    it.next()
+        .map(|l| l.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 pub fn clear_pid(pid_file: &Path) {

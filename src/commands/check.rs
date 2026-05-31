@@ -1,7 +1,7 @@
 use crate::compat::{self, CompatStatus};
-use anyhow::Result;
 use crate::paths::ProjectLayout;
 use crate::yml::Snap;
+use anyhow::Result;
 
 pub async fn run(target_mc: &str) -> Result<()> {
     let layout = ProjectLayout::discover(&std::env::current_dir()?)?;
@@ -17,11 +17,17 @@ pub async fn run(target_mc: &str) -> Result<()> {
         match &r.status {
             CompatStatus::Compatible { suggested_version } => {
                 ok += 1;
-                println!("  ok    {:<32} {} -> {}", r.mod_id, r.current_version, suggested_version);
+                println!(
+                    "  ok    {:<32} {} -> {}",
+                    r.mod_id, r.current_version, suggested_version
+                );
             }
             CompatStatus::Incompatible => {
                 miss += 1;
-                println!("  miss  {:<32} {} (no version)", r.mod_id, r.current_version);
+                println!(
+                    "  miss  {:<32} {} (no version)",
+                    r.mod_id, r.current_version
+                );
             }
             CompatStatus::Unknown => {
                 other += 1;

@@ -6,7 +6,7 @@ Think "docker-compose for Minecraft servers".
 
 ## Status
 
-Working: Vanilla and Fabric loaders, Modrinth and direct-URL mod providers, install / start / stop / status / logs / console / pack / unpack / validate / doctor / check / updatable / search / update / revert, system Java discovery with Adoptium Temurin auto-download fallback, content-addressed jar cache, RCON-based lifecycle, source bundles, snapshot-based version updates.
+Working: Vanilla and Fabric loaders, Modrinth / CurseForge / direct-URL mod providers, datapacks (Modrinth, CurseForge, VanillaTweaks, direct URL), install / start / stop / status / logs / console / pack / unpack / validate / doctor / check / updatable / search / update / revert, system Java discovery with Adoptium Temurin auto-download fallback, content-addressed jar cache, RCON-based lifecycle, source bundles, snapshot-based version updates.
 
 Tracks the Minecraft 26.x series; default scaffold pins 26.1.2 + Java 26. Tested on Linux with system Java 26. Windows process management and the hardlink-based cache are implemented but not CI-tested.
 
@@ -76,15 +76,38 @@ mods:
   - id: fabric-api
     provider: modrinth
     version: latest
+  - id: "238222"            # JEI, by CurseForge project id (or slug)
+    provider: curseforge
+    version: latest
   - url: https://github.com/owner/repo/releases/download/v1.0/mymod.jar
     provider: url
     sha256: abc123...
+
+datapacks:
+  - id: terralith
+    provider: modrinth
+    version: latest
+  - provider: vanillatweaks
+    version: "26.1"
+    packs:
+      survival:
+        - graves
+        - afk_display
+  - url: https://example.com/my-pack.zip
+    provider: url
+    sha256: def456...
 
 config:
   server.properties:
     motd: "Welcome to Grimwald"
     max-players: 20
 ```
+
+Datapacks install into the world's `datapacks/` directory (`<level-name>/datapacks/`, default `world/datapacks/`).
+
+## CurseForge
+
+The CurseForge v1 API requires a personal API key. Set `CURSEFORGE_API_KEY` (or `CF_API_KEY`) in your environment before running `install` / `update` / `search`; get a key at <https://console.curseforge.com>. Mods can be referenced by numeric project id or slug, and pinned to a specific file id via `version`.
 
 ## Commands
 

@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use crate::{LaunchCtx, LoaderSpec, ResolvedLoader, ServerLoader};
+use async_trait::async_trait;
 use serde::Deserialize;
 use sha1::{Digest, Sha1};
 use std::path::Path;
@@ -117,7 +117,9 @@ impl ServerLoader for Vanilla {
         if got_sha1 != want_sha1 {
             anyhow::bail!(
                 "vanilla server jar sha1 mismatch for {}: manifest says {}, got {}",
-                minecraft, want_sha1, got_sha1
+                minecraft,
+                want_sha1,
+                got_sha1
             );
         }
         let sha256 = crate::cache::sha256_hex(&bytes);

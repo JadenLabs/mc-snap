@@ -1,6 +1,6 @@
-use anyhow::Result;
 use crate::paths::ProjectLayout;
 use crate::yml::Snap;
+use anyhow::Result;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::time::Duration;
 

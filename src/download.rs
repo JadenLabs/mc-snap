@@ -28,9 +28,7 @@ pub async fn fetch_bytes_capped(
 
     if let Some(len) = resp.content_length() {
         if len > max_bytes {
-            bail!(
-                "{url} content-length {len} exceeds cap {max_bytes}"
-            );
+            bail!("{url} content-length {len} exceeds cap {max_bytes}");
         }
     }
 
@@ -73,9 +71,7 @@ pub async fn fetch_into_cache(
     let bytes = fetch_bytes(client, url).await?;
     let got = sha256_hex(&bytes);
     if got != expected_sha256 {
-        bail!(
-            "sha256 mismatch for {url}: expected {expected_sha256}, got {got}"
-        );
+        bail!("sha256 mismatch for {url}: expected {expected_sha256}, got {got}");
     }
     cache.store(expected_sha256, &bytes)
 }

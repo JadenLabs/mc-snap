@@ -1,6 +1,6 @@
+use mc_snap::providers::url::UrlProvider;
 use mc_snap::yml::ModEntry;
 use mc_snap::{ModProvider, ModSpec, ResolveEnv};
-use mc_snap::providers::url::UrlProvider;
 
 const SHA: &str = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 

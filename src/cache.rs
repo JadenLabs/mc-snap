@@ -28,8 +28,7 @@ impl ContentCache {
         // Write to a sibling temp file then rename so an interrupted run can't leave a
         // truncated file at the canonical path.
         let tmp = p.with_extension(format!("tmp.{}", std::process::id()));
-        std::fs::write(&tmp, bytes)
-            .with_context(|| format!("writing {}", tmp.display()))?;
+        std::fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
         match std::fs::rename(&tmp, &p) {
             Ok(()) => Ok(p),
             Err(e) => {

@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::paths::ProjectLayout;
+use anyhow::Result;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;

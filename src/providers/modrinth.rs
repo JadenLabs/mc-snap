@@ -1,6 +1,6 @@
-use async_trait::async_trait;
 use crate::yml::ModEntry;
 use crate::{AvailableVersion, ModProvider, ModSpec, ResolveEnv, ResolvedMod};
+use async_trait::async_trait;
 use serde::Deserialize;
 
 const API: &str = "https://api.modrinth.com/v2";
@@ -28,7 +28,10 @@ impl Modrinth {
     }
 
     pub fn with_base(base: impl Into<String>) -> Self {
-        Self { base: base.into(), ..Self::new() }
+        Self {
+            base: base.into(),
+            ..Self::new()
+        }
     }
 }
 
@@ -70,10 +73,7 @@ struct Project {
 impl Modrinth {
     /// Look up a Modrinth project by jar SHA-512. Returns `(slug, version_number)`
     /// on a 200, `None` on 404. Used by `init --detect` to identify jars on disk.
-    pub async fn lookup_by_sha512(
-        &self,
-        hash: &str,
-    ) -> anyhow::Result<Option<(String, String)>> {
+    pub async fn lookup_by_sha512(&self, hash: &str) -> anyhow::Result<Option<(String, String)>> {
         let url = format!("{}/version_file/{}?algorithm=sha512", self.base, hash);
         let resp = self.client.get(&url).send().await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {

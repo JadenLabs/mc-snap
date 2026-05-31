@@ -26,7 +26,8 @@ impl Rcon {
 
     async fn auth(&mut self, password: &str) -> Result<()> {
         let id = self.alloc_id();
-        self.write_packet(id, TYPE_AUTH, password.as_bytes()).await?;
+        self.write_packet(id, TYPE_AUTH, password.as_bytes())
+            .await?;
         let (rid, rtype, _body) = self.read_packet().await?;
         if rtype != TYPE_AUTH_RESPONSE {
             bail!("unexpected rcon auth response type {rtype}");

@@ -1,6 +1,6 @@
+use mc_snap::loaders::vanilla::Vanilla;
 use mc_snap::yml::Loader;
 use mc_snap::{LoaderSpec, ServerLoader};
-use mc_snap::loaders::vanilla::Vanilla;
 use serde_json::json;
 use sha1::{Digest, Sha1};
 use wiremock::matchers::{method, path};
@@ -13,7 +13,11 @@ fn sha1_hex(bytes: &[u8]) -> String {
 }
 
 fn spec() -> LoaderSpec {
-    LoaderSpec(Loader { kind: "vanilla".into(), version: None, installer: None })
+    LoaderSpec(Loader {
+        kind: "vanilla".into(),
+        version: None,
+        installer: None,
+    })
 }
 
 #[tokio::test]

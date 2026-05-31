@@ -73,7 +73,11 @@ pub fn create(layout: &ProjectLayout, meta: SnapshotMeta) -> Result<Snapshot> {
     }
 
     std::fs::rename(&staging, &dir).with_context(|| {
-        format!("publishing snapshot {} -> {}", staging.display(), dir.display())
+        format!(
+            "publishing snapshot {} -> {}",
+            staging.display(),
+            dir.display()
+        )
     })?;
 
     Ok(Snapshot { dir, meta })
@@ -129,8 +133,8 @@ pub fn list(layout: &ProjectLayout) -> Result<Vec<Snapshot>> {
             continue;
         }
         let s = std::fs::read_to_string(&meta_path)?;
-        let meta: SnapshotMeta = toml::from_str(&s)
-            .with_context(|| format!("parsing {}", meta_path.display()))?;
+        let meta: SnapshotMeta =
+            toml::from_str(&s).with_context(|| format!("parsing {}", meta_path.display()))?;
         out.push(Snapshot { dir: path, meta });
     }
     out.sort_by(|a, b| a.meta.id.cmp(&b.meta.id));
@@ -245,7 +249,10 @@ mod tests {
 
         let loaded = load(&layout, "snap-1").unwrap();
         restore(&layout, &loaded).unwrap();
-        assert_eq!(std::fs::read_to_string(layout.yml()).unwrap(), "schema: 1\n");
+        assert_eq!(
+            std::fs::read_to_string(layout.yml()).unwrap(),
+            "schema: 1\n"
+        );
         assert_eq!(
             std::fs::read_to_string(layout.configs_dir().join("a.txt")).unwrap(),
             "hello"

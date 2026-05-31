@@ -102,7 +102,9 @@ pub fn cached_temurin(jdks_root: &Path, major: u32) -> Option<JavaInstall> {
 
 pub async fn download_temurin(jdks_root: &Path, major: u32) -> anyhow::Result<JavaInstall> {
     let (os, arch, image_type, archive_ext) = adoptium_target()?;
-    let target = jdks_root.join(major.to_string()).join(format!("{os}-{arch}"));
+    let target = jdks_root
+        .join(major.to_string())
+        .join(format!("{os}-{arch}"));
     std::fs::create_dir_all(&target)?;
 
     let client = reqwest::Client::builder()
@@ -114,8 +116,7 @@ pub async fn download_temurin(jdks_root: &Path, major: u32) -> anyhow::Result<Ja
 
     // Use the assets API to get both download URL and checksum in one request,
     // avoiding the unreliable /v3/checksum/latest/ endpoint.
-    let (url, want_sha256) =
-        fetch_adoptium_asset(&client, major, os, arch, image_type).await?;
+    let (url, want_sha256) = fetch_adoptium_asset(&client, major, os, arch, image_type).await?;
 
     let bytes = client
         .get(&url)
@@ -133,9 +134,7 @@ pub async fn download_temurin(jdks_root: &Path, major: u32) -> anyhow::Result<Ja
         hex::encode(h.finalize())
     };
     if got_sha256 != want_sha256 {
-        anyhow::bail!(
-            "adoptium jdk sha256 mismatch: published {want_sha256}, got {got_sha256}"
-        );
+        anyhow::bail!("adoptium jdk sha256 mismatch: published {want_sha256}, got {got_sha256}");
     }
 
     let tmp = tempfile::NamedTempFile::new()?;
@@ -215,7 +214,11 @@ fn adoptium_target() -> anyhow::Result<(&'static str, &'static str, &'static str
     } else {
         anyhow::bail!("unsupported arch");
     };
-    let ext = if cfg!(target_os = "windows") { "zip" } else { "tar.gz" };
+    let ext = if cfg!(target_os = "windows") {
+        "zip"
+    } else {
+        "tar.gz"
+    };
     Ok((os, arch, "jdk", ext))
 }
 
@@ -227,12 +230,20 @@ fn target_triple() -> String {
     } else {
         "windows"
     };
-    let arch = if cfg!(target_arch = "x86_64") { "x64" } else { "aarch64" };
+    let arch = if cfg!(target_arch = "x86_64") {
+        "x64"
+    } else {
+        "aarch64"
+    };
     format!("{os}-{arch}")
 }
 
 fn java_binary_name() -> &'static str {
-    if cfg!(target_os = "windows") { "java.exe" } else { "java" }
+    if cfg!(target_os = "windows") {
+        "java.exe"
+    } else {
+        "java"
+    }
 }
 
 fn extract_archive(archive: &Path, dest: &Path, ext: &str) -> anyhow::Result<()> {
@@ -282,7 +293,11 @@ fn safe_extract_zip(archive: &Path, dest: &Path) -> anyhow::Result<()> {
         }
 
         // Refuse symlink entries — they could point outside the destination on extraction.
-        if entry.unix_mode().map(|m| m & 0o170000 == 0o120000).unwrap_or(false) {
+        if entry
+            .unix_mode()
+            .map(|m| m & 0o170000 == 0o120000)
+            .unwrap_or(false)
+        {
             anyhow::bail!("zip contains symlink entry: {}", name.display());
         }
 
@@ -328,7 +343,11 @@ fn flatten_jdk_root(dest: &Path) -> anyhow::Result<()> {
     }
     let inner = entries.remove(0).path();
     let nested = inner.join("Contents/Home");
-    let from = if nested.exists() { nested } else { inner.clone() };
+    let from = if nested.exists() {
+        nested
+    } else {
+        inner.clone()
+    };
     for entry in std::fs::read_dir(&from)? {
         let entry = entry?;
         let from_path = entry.path();

@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use crate::cache::ContentCache;
 use crate::download::{fetch_into_cache, http_client};
 use crate::lock::{Lock, LockLoader, LockMod};
@@ -6,14 +5,21 @@ use crate::paths::{GlobalDirs, ProjectLayout};
 use crate::state::InstallState;
 use crate::yml::{ModEntry, Snap};
 use crate::{LoaderSpec, ResolveEnv};
+use anyhow::{Context, Result};
 use std::path::Path;
 use tracing::info;
 
 pub async fn resolve(snap: &Snap) -> Result<Lock> {
     let loader_impl = crate::loaders::for_kind(&snap.server.loader.kind)?;
-    info!("resolving loader {} for minecraft {}", snap.server.loader.kind, snap.server.minecraft);
+    info!(
+        "resolving loader {} for minecraft {}",
+        snap.server.loader.kind, snap.server.minecraft
+    );
     let resolved_loader = loader_impl
-        .resolve(&snap.server.minecraft, &LoaderSpec(snap.server.loader.clone()))
+        .resolve(
+            &snap.server.minecraft,
+            &LoaderSpec(snap.server.loader.clone()),
+        )
         .await?;
 
     let env = ResolveEnv {
@@ -28,6 +34,20 @@ pub async fn resolve(snap: &Snap) -> Result<Lock> {
         info!("resolving mod {label}");
         let resolved = crate::providers::resolve_entry(entry, &env).await?;
         lock_mods.push(LockMod {
+            id: resolved.id,
+            provider: resolved.provider,
+            version: resolved.version,
+            filename: resolved.filename,
+            url: resolved.url,
+            sha256: resolved.sha256,
+        });
+    }
+
+    let mut lock_datapacks = Vec::with_capacity(snap.datapacks.len());
+    for entry in &snap.datapacks {
+        info!("resolving datapack {}", entry.label());
+        let resolved = crate::providers::resolve_datapack(entry, &env).await?;
+        lock_datapacks.push(LockMod {
             id: resolved.id,
             provider: resolved.provider,
             version: resolved.version,
@@ -59,6 +79,7 @@ pub async fn resolve(snap: &Snap) -> Result<Lock> {
                 .collect(),
         },
         mods: lock_mods,
+        datapacks: lock_datapacks,
         jdk: None,
     })
 }
@@ -81,9 +102,7 @@ pub async fn materialize(layout: &ProjectLayout, snap: &Snap, lock: &Lock) -> Re
     std::fs::create_dir_all(server_dir.join("config"))?;
     std::fs::create_dir_all(layout.snap_dir())?;
 
-    let server_jar_path = cache
-        .path_for(&lock.loader.server_jar_sha256)
-        .to_path_buf();
+    let server_jar_path = cache.path_for(&lock.loader.server_jar_sha256).to_path_buf();
     if !server_jar_path.is_file() {
         info!("downloading server jar");
         fetch_into_cache(
@@ -99,12 +118,25 @@ pub async fn materialize(layout: &ProjectLayout, snap: &Snap, lock: &Lock) -> Re
         "fabric" => "fabric-server-launch.jar",
         _ => "server.jar",
     };
-    cache.link_into(&lock.loader.server_jar_sha256, &server_dir.join(launch_jar_name))?;
+    cache.link_into(
+        &lock.loader.server_jar_sha256,
+        &server_dir.join(launch_jar_name),
+    )?;
 
     for m in &lock.mods {
         info!("downloading mod {} {}", m.id, m.version);
         fetch_into_cache(&client, &cache, &m.url, &m.sha256).await?;
         cache.link_into(&m.sha256, &server_dir.join("mods").join(&m.filename))?;
+    }
+
+    if !lock.datapacks.is_empty() {
+        let datapacks_dir = server_dir.join(level_name(snap)).join("datapacks");
+        std::fs::create_dir_all(&datapacks_dir)?;
+        for d in &lock.datapacks {
+            info!("downloading datapack {} {}", d.id, d.version);
+            fetch_into_cache(&client, &cache, &d.url, &d.sha256).await?;
+            cache.link_into(&d.sha256, &datapacks_dir.join(&d.filename))?;
+        }
     }
 
     write_eula(&server_dir)?;
@@ -131,10 +163,7 @@ fn write_properties(server_dir: &Path, snap: &Snap, layout: &ProjectLayout) -> R
 
     let mut overrides = snap.config.server_properties.clone();
     overrides.insert("enable-rcon".into(), serde_yml::Value::Bool(true));
-    overrides.insert(
-        "rcon.password".into(),
-        serde_yml::Value::String(password),
-    );
+    overrides.insert("rcon.password".into(), serde_yml::Value::String(password));
     // Force RCON to bind to loopback regardless of what the user puts in their
     // yml - Minecraft RCON is plaintext, so the password leaks if it listens
     // externally. If a user genuinely needs remote admin they should tunnel.
@@ -178,8 +207,7 @@ fn write_sensitive(path: &Path, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, bytes)
-        .with_context(|| format!("writing {}", path.display()))?;
+    std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -214,6 +242,18 @@ fn sha256_of_string(s: &str) -> String {
     crate::cache::sha256_hex(s.as_bytes())
 }
 
+/// Resolve the world directory name datapacks install under, honoring a
+/// `level-name` override in server.properties. Defaults to Minecraft's "world".
+fn level_name(snap: &Snap) -> String {
+    snap.config
+        .server_properties
+        .get("level-name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "world".to_string())
+}
+
 fn mod_label(entry: &ModEntry) -> String {
     match entry {
         ModEntry::Registry { id, version, .. } => format!("{id} {version}"),
@@ -242,9 +282,8 @@ pub fn clean_stale_artifacts(layout: &ProjectLayout, snap: &Snap, lock: &Lock) -
             if !expected.contains(name_s.as_str()) {
                 let p = entry.path();
                 if p.is_file() || p.is_symlink() {
-                    std::fs::remove_file(&p).with_context(|| {
-                        format!("removing stale mod {}", p.display())
-                    })?;
+                    std::fs::remove_file(&p)
+                        .with_context(|| format!("removing stale mod {}", p.display()))?;
                 }
             }
         }
@@ -291,6 +330,7 @@ mod tests {
             },
             runtime: Default::default(),
             mods: vec![],
+            datapacks: vec![],
             config: Default::default(),
         }
     }
@@ -319,6 +359,7 @@ mod tests {
                     sha256: "c".repeat(64),
                 })
                 .collect(),
+            datapacks: vec![],
             jdk: None,
         }
     }

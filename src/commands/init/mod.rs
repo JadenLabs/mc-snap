@@ -7,7 +7,7 @@ use serde_yml::{Mapping, Value};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
-use crate::yml::{ConfigSection, FileRef, Loader, ModEntry, Runtime, Server, Snap};
+use crate::yml::{ConfigSection, DatapackEntry, FileRef, Loader, ModEntry, Runtime, Server, Snap};
 use detect::Detected;
 
 pub use detect::detect as detect_path;
@@ -104,7 +104,10 @@ pub async fn run(
     print_gitignore_hint(written_location.as_deref());
 
     println!();
-    println!("\x1b[1;32m✓\x1b[0m created \x1b[1m{}\x1b[0m", target.display());
+    println!(
+        "\x1b[1;32m✓\x1b[0m created \x1b[1m{}\x1b[0m",
+        target.display()
+    );
     println!(
         "  next: review the file, set \x1b[1meula: true\x1b[0m after reading \x1b[36mhttps://www.minecraft.net/en-us/eula\x1b[0m,"
     );
@@ -195,6 +198,23 @@ fn print_detection_summary(d: &Detected, no_mod_resolve: bool) {
                 d.unresolved_mods.len()
             );
             for name in &d.unresolved_mods {
+                println!("    \x1b[2m-\x1b[0m {name}");
+            }
+        }
+    }
+    if !d.datapacks.is_empty() || !d.unresolved_datapacks.is_empty() {
+        if no_mod_resolve {
+            println!(
+                "  {bullet} datapacks: {} zip(s) listed (resolve skipped)",
+                d.unresolved_datapacks.len()
+            );
+        } else {
+            println!(
+                "  {bullet} datapacks: {} resolved via Modrinth, {} unresolved",
+                d.datapacks.len(),
+                d.unresolved_datapacks.len()
+            );
+            for name in &d.unresolved_datapacks {
                 println!("    \x1b[2m-\x1b[0m {name}");
             }
         }
@@ -351,11 +371,7 @@ fn wizard(cwd: &Path, detected: Option<&Detected>) -> Result<String> {
     Ok(render_yml(&snap))
 }
 
-fn scan_and_select_configs(
-    cwd: &Path,
-    snap: &Snap,
-    detected: &Detected,
-) -> Result<Vec<FileRef>> {
+fn scan_and_select_configs(cwd: &Path, snap: &Snap, detected: &Detected) -> Result<Vec<FileRef>> {
     use crate::commands::config::{scan_config_dir, track_candidate};
     use inquire::MultiSelect;
 
@@ -455,6 +471,7 @@ fn render_from_detected(cwd: &Path, d: &Detected) -> String {
         &props,
         d.eula,
     );
+    snap.datapacks = d.datapacks.clone();
     snap.config.files = scan_configs_all(cwd, &snap, d).unwrap_or_default();
     render_yml(&snap)
 }
@@ -518,17 +535,74 @@ pub fn render_yml(snap: &Snap) -> String {
         out.push_str("mods:\n");
         for entry in &snap.mods {
             match entry {
-                ModEntry::Registry { id, provider, version } => {
+                ModEntry::Registry {
+                    id,
+                    provider,
+                    version,
+                } => {
                     out.push_str(&format!("  - id: {}\n", yaml_scalar(id)));
                     out.push_str(&format!("    provider: {}\n", yaml_scalar(provider)));
                     out.push_str(&format!("    version: {}\n", yaml_scalar(version)));
                 }
-                ModEntry::Url { url, provider, sha256, filename } => {
+                ModEntry::Url {
+                    url,
+                    provider,
+                    sha256,
+                    filename,
+                } => {
                     out.push_str(&format!("  - url: {}\n", yaml_scalar(url)));
                     out.push_str(&format!("    provider: {}\n", yaml_scalar(provider)));
                     out.push_str(&format!("    sha256: {}\n", yaml_scalar(sha256)));
                     if let Some(f) = filename {
                         out.push_str(&format!("    filename: {}\n", yaml_scalar(f)));
+                    }
+                }
+            }
+        }
+        out.push('\n');
+    }
+
+    if !snap.datapacks.is_empty() {
+        out.push_str("datapacks:\n");
+        for dp in &snap.datapacks {
+            match dp {
+                DatapackEntry::Registry {
+                    id,
+                    provider,
+                    version,
+                } => {
+                    out.push_str(&format!("  - id: {}\n", yaml_scalar(id)));
+                    out.push_str(&format!("    provider: {}\n", yaml_scalar(provider)));
+                    out.push_str(&format!("    version: {}\n", yaml_scalar(version)));
+                }
+                DatapackEntry::Url {
+                    url,
+                    provider,
+                    sha256,
+                    filename,
+                } => {
+                    out.push_str(&format!("  - url: {}\n", yaml_scalar(url)));
+                    out.push_str(&format!("    provider: {}\n", yaml_scalar(provider)));
+                    out.push_str(&format!("    sha256: {}\n", yaml_scalar(sha256)));
+                    if let Some(f) = filename {
+                        out.push_str(&format!("    filename: {}\n", yaml_scalar(f)));
+                    }
+                }
+                DatapackEntry::VanillaTweaks {
+                    provider,
+                    packs,
+                    version,
+                } => {
+                    out.push_str(&format!("  - provider: {}\n", yaml_scalar(provider)));
+                    if let Some(v) = version {
+                        out.push_str(&format!("    version: {}\n", yaml_scalar(v)));
+                    }
+                    out.push_str("    packs:\n");
+                    for (category, names) in packs {
+                        out.push_str(&format!("      {}:\n", yaml_scalar(category)));
+                        for n in names {
+                            out.push_str(&format!("        - {}\n", yaml_scalar(n)));
+                        }
                     }
                 }
             }
@@ -593,6 +667,7 @@ fn build_snap(
             flags: vec![],
         },
         mods: mods.to_vec(),
+        datapacks: vec![],
         config: ConfigSection {
             server_properties: server_properties.clone(),
             files: vec![],
@@ -648,7 +723,9 @@ fn render_config() -> RenderConfig<'static> {
 fn ensure_gitignore(dir: &Path) -> Result<()> {
     let path = dir.join(".gitignore");
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
-    if existing.lines().any(|l| l.trim() == ".mc-snap") || existing.lines().any(|l| l.trim() == ".mc-snap/") {
+    if existing.lines().any(|l| l.trim() == ".mc-snap")
+        || existing.lines().any(|l| l.trim() == ".mc-snap/")
+    {
         return Ok(());
     }
     let mut new = existing;
@@ -702,7 +779,18 @@ mod tests {
             version: "latest".into(),
         }];
         let props = props_with("welcome!", 20);
-        let body = r("grimwald", "the grimwald smp", "26.1.2", "fabric", None, 26, "4G", &mods, &props, true);
+        let body = r(
+            "grimwald",
+            "the grimwald smp",
+            "26.1.2",
+            "fabric",
+            None,
+            26,
+            "4G",
+            &mods,
+            &props,
+            true,
+        );
         let snap = Snap::from_str(&body).unwrap();
         assert_eq!(snap.server.name, "grimwald");
         assert_eq!(snap.server.minecraft, "26.1.2");
@@ -716,7 +804,18 @@ mod tests {
     #[test]
     fn vanilla_without_mods_has_empty_mods() {
         let props = props_with("hi", 10);
-        let body = r("vanilla-svr", "", "26.1.2", "vanilla", None, 26, "2G", &[], &props, false);
+        let body = r(
+            "vanilla-svr",
+            "",
+            "26.1.2",
+            "vanilla",
+            None,
+            26,
+            "2G",
+            &[],
+            &props,
+            false,
+        );
         let snap = Snap::from_str(&body).unwrap();
         assert_eq!(snap.server.loader.kind, "vanilla");
         assert!(snap.mods.is_empty());
@@ -734,7 +833,18 @@ mod tests {
             Value::String("max-players".into()),
             Value::Number(20i64.into()),
         );
-        let body = r("weird:name", "has # hash", "26.1.2", "fabric", None, 26, "4G", &[], &props, false);
+        let body = r(
+            "weird:name",
+            "has # hash",
+            "26.1.2",
+            "fabric",
+            None,
+            26,
+            "4G",
+            &[],
+            &props,
+            false,
+        );
         let snap = Snap::from_str(&body).unwrap();
         assert_eq!(snap.server.name, "weird:name");
     }
@@ -742,7 +852,18 @@ mod tests {
     #[test]
     fn renders_location_when_present() {
         let props = props_with("hi", 20);
-        let body = r("s", "", "26.1.2", "vanilla", Some("server"), 26, "2G", &[], &props, true);
+        let body = r(
+            "s",
+            "",
+            "26.1.2",
+            "vanilla",
+            Some("server"),
+            26,
+            "2G",
+            &[],
+            &props,
+            true,
+        );
         let snap = Snap::from_str(&body).unwrap();
         assert_eq!(snap.server.location.as_deref(), Some("server"));
     }
@@ -750,7 +871,18 @@ mod tests {
     #[test]
     fn omits_location_when_none() {
         let props = props_with("hi", 20);
-        let body = r("s", "", "26.1.2", "vanilla", None, 26, "2G", &[], &props, true);
+        let body = r(
+            "s",
+            "",
+            "26.1.2",
+            "vanilla",
+            None,
+            26,
+            "2G",
+            &[],
+            &props,
+            true,
+        );
         assert!(!body.contains("location:"));
         let snap = Snap::from_str(&body).unwrap();
         assert!(snap.server.location.is_none());
@@ -775,7 +907,9 @@ mod tests {
             filename: Some("x.jar".into()),
         }];
         let props = props_with("hi", 20);
-        let body = r("s", "", "26.1.2", "vanilla", None, 26, "2G", &mods, &props, false);
+        let body = r(
+            "s", "", "26.1.2", "vanilla", None, 26, "2G", &mods, &props, false,
+        );
         let snap = Snap::from_str(&body).unwrap();
         assert_eq!(snap.mods.len(), 1);
     }
@@ -788,30 +922,50 @@ mod tests {
             Value::Number(20i64.into()),
         );
         props.insert(Value::String("online-mode".into()), Value::Bool(true));
-        props.insert(
-            Value::String("motd".into()),
-            Value::String("hello".into()),
+        props.insert(Value::String("motd".into()), Value::String("hello".into()));
+        let body = r(
+            "s",
+            "",
+            "26.1.2",
+            "vanilla",
+            None,
+            26,
+            "2G",
+            &[],
+            &props,
+            false,
         );
-        let body = r("s", "", "26.1.2", "vanilla", None, 26, "2G", &[], &props, false);
         let snap = Snap::from_str(&body).unwrap();
         let saved = &snap.config.server_properties;
         assert_eq!(
             saved[Value::String("max-players".into())],
             Value::Number(20i64.into())
         );
-        assert_eq!(saved[Value::String("online-mode".into())], Value::Bool(true));
+        assert_eq!(
+            saved[Value::String("online-mode".into())],
+            Value::Bool(true)
+        );
     }
 
     #[test]
     fn renders_config_files_block() {
         let props = props_with("hi", 20);
-        let mut snap = build_snap("s", "", "26.1.2", "vanilla", None, 26, "2G", &[], &props, false);
-        snap.config.files = vec![
-            crate::yml::FileRef {
-                src: "configs/chunky.toml".into(),
-                dst: "config/chunky.toml".into(),
-            },
-        ];
+        let mut snap = build_snap(
+            "s",
+            "",
+            "26.1.2",
+            "vanilla",
+            None,
+            26,
+            "2G",
+            &[],
+            &props,
+            false,
+        );
+        snap.config.files = vec![crate::yml::FileRef {
+            src: "configs/chunky.toml".into(),
+            dst: "config/chunky.toml".into(),
+        }];
         let body = render_yml(&snap);
         assert!(body.contains("files:"));
         let parsed = Snap::from_str(&body).unwrap();
@@ -821,9 +975,82 @@ mod tests {
     }
 
     #[test]
+    fn renders_and_round_trips_datapacks() {
+        use crate::yml::DatapackEntry;
+        use std::collections::BTreeMap;
+
+        let props = props_with("hi", 20);
+        let mut snap = build_snap(
+            "s",
+            "",
+            "26.1.2",
+            "fabric",
+            None,
+            26,
+            "2G",
+            &[],
+            &props,
+            true,
+        );
+        let mut packs = BTreeMap::new();
+        packs.insert("survival".to_string(), vec!["graves".to_string()]);
+        snap.datapacks = vec![
+            DatapackEntry::Registry {
+                id: "terralith".into(),
+                provider: "modrinth".into(),
+                version: "latest".into(),
+            },
+            DatapackEntry::VanillaTweaks {
+                provider: "vanillatweaks".into(),
+                packs,
+                version: Some("1.21".into()),
+            },
+            DatapackEntry::Url {
+                url: "https://example.com/p.zip".into(),
+                provider: "url".into(),
+                sha256: "0".repeat(64),
+                filename: Some("p.zip".into()),
+            },
+        ];
+        let body = render_yml(&snap);
+        assert!(body.contains("datapacks:"));
+        let parsed = Snap::from_str(&body).unwrap();
+        assert_eq!(parsed.datapacks, snap.datapacks);
+    }
+
+    #[test]
+    fn omits_datapacks_block_when_empty() {
+        let props = props_with("hi", 20);
+        let body = r(
+            "s",
+            "",
+            "26.1.2",
+            "vanilla",
+            None,
+            26,
+            "2G",
+            &[],
+            &props,
+            true,
+        );
+        assert!(!body.contains("datapacks:"));
+    }
+
+    #[test]
     fn round_trips_loader_version_and_flags() {
         let props = props_with("hi", 20);
-        let mut snap = build_snap("s", "", "26.1.2", "fabric", None, 26, "2G", &[], &props, true);
+        let mut snap = build_snap(
+            "s",
+            "",
+            "26.1.2",
+            "fabric",
+            None,
+            26,
+            "2G",
+            &[],
+            &props,
+            true,
+        );
         snap.server.loader.version = Some("0.16.9".into());
         snap.runtime.flags = vec!["-XX:+UseG1GC".into(), "-XX:+ParallelRefProcEnabled".into()];
         let body = render_yml(&snap);

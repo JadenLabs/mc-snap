@@ -6,8 +6,8 @@ const MAX_BUNDLE_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 pub async fn run(bundle: &str) -> Result<()> {
     let path = PathBuf::from(bundle);
-    let f = std::fs::File::open(&path)
-        .with_context(|| format!("opening bundle {}", path.display()))?;
+    let f =
+        std::fs::File::open(&path).with_context(|| format!("opening bundle {}", path.display()))?;
     let mut zf = zip::ZipArchive::new(f)?;
     let dst = std::env::current_dir()?;
     let dst_canon = dst.canonicalize().unwrap_or(dst.clone());
@@ -28,7 +28,10 @@ pub async fn run(bundle: &str) -> Result<()> {
 
         // Reject symlinks outright — they're a vector for escaping the destination.
         if is_symlink(&entry) {
-            bail!("bundle contains a symlink entry ({}), refusing to extract", raw_name.display());
+            bail!(
+                "bundle contains a symlink entry ({}), refusing to extract",
+                raw_name.display()
+            );
         }
 
         if entry.size() > MAX_BUNDLE_FILE_BYTES {
@@ -82,5 +85,8 @@ fn ensure_under(root: &Path, child: &Path) -> Result<()> {
 
 fn is_symlink(entry: &zip::read::ZipFile) -> bool {
     // Unix mode bits encode file type. 0o120000 = symlink.
-    entry.unix_mode().map(|m| m & 0o170000 == 0o120000).unwrap_or(false)
+    entry
+        .unix_mode()
+        .map(|m| m & 0o170000 == 0o120000)
+        .unwrap_or(false)
 }

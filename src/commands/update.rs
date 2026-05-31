@@ -1,12 +1,12 @@
 use crate::compat::{self, CompatStatus};
-use crate::orchestrate;
-use anyhow::{Context, Result};
 use crate::lock::Lock;
+use crate::orchestrate;
 use crate::paths::ProjectLayout;
 use crate::proclock::ProjectLock;
+use crate::runtime::process;
 use crate::snapshot::{self, SnapshotMeta};
 use crate::yml::{ModEntry, Snap};
-use crate::runtime::process;
+use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::io::{BufRead, IsTerminal, Write};
 
@@ -23,7 +23,9 @@ pub async fn run(
 
     if let Some(pid) = process::read_pid(&layout.pid_file()) {
         if process::is_running_recorded(&layout.pid_file(), pid) {
-            anyhow::bail!("server is running (pid {pid}); stop it with `mc-snap stop` before updating");
+            anyhow::bail!(
+                "server is running (pid {pid}); stop it with `mc-snap stop` before updating"
+            );
         }
     }
 
@@ -67,7 +69,10 @@ pub async fn run(
 
     if !skipped.is_empty() {
         if skip_missing {
-            println!("--skip-missing: dropping {} incompatible mod(s)", skipped.len());
+            println!(
+                "--skip-missing: dropping {} incompatible mod(s)",
+                skipped.len()
+            );
         } else if assume_yes {
             anyhow::bail!(
                 "{} mod(s) lack a {target_mc} version: {}. Re-run with --skip-missing to drop them.",
@@ -146,8 +151,8 @@ pub async fn run(
     // auto-restore from the snapshot we just took so the user isn't left with
     // half-written yml/lock + a partial server dir.
     let apply = async {
-        let new_yml_text = serde_yml::to_string(&new_snap)
-            .context("serializing updated mc-snap.yml")?;
+        let new_yml_text =
+            serde_yml::to_string(&new_snap).context("serializing updated mc-snap.yml")?;
         write_atomic(&layout.yml(), new_yml_text.as_bytes())?;
         new_lock.write(&layout.lock())?;
 

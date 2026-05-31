@@ -56,6 +56,7 @@ require() {
     fi
 }
 require java
+require python3
 
 step "build"
 (cd "$ROOT" && cargo build --quiet)
@@ -76,7 +77,59 @@ fi
 
 step "reset test directory"
 rm -rf "$TEST_DIR" "$UNPACK_DIR" "$BUNDLE"
-mkdir -p "$TEST_DIR"
+mkdir -p "$TEST_DIR/configs"
+
+step "stage vanilla tweaks datapack fixture"
+# A real Vanilla Tweaks bundle is built per-MC-version by vanillatweaks.net.
+# For the e2e we synthesize a minimal datapack with a load.mcfunction so we
+# can verify it gets picked up by the server's datapack scanner. supported_formats
+# is wide-open so any modern MC accepts it.
+python3 - "$TEST_DIR/configs/vanilla-tweaks.zip" <<'PY'
+import json
+import sys
+import zipfile
+
+out = sys.argv[1]
+# pack_format 81 matches MC 1.21.6/1.21.7. Recent MC (1.21.5+) requires the
+# array form `supported_formats: [min, max]` when claiming broader compat;
+# the old `{min_inclusive, max_inclusive}` object form trips a validation
+# error on these versions, and `min_format`/`max_format` are not the right
+# fields. [4, 81] covers all reasonable backwards-compat targets without
+# claiming support for formats newer than the running server.
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr(
+        "pack.mcmeta",
+        json.dumps(
+            {
+                "pack": {
+                    "pack_format": 81,
+                    "description": "vanilla tweaks (e2e fixture)",
+                    "supported_formats": [4, 81],
+                }
+            }
+        ),
+    )
+    z.writestr(
+        "data/minecraft/tags/function/load.json",
+        json.dumps({"values": ["vanillatweaks:load"]}),
+    )
+    z.writestr(
+        "data/vanillatweaks/function/load.mcfunction",
+        "say [vanilla-tweaks] e2e fixture loaded\n",
+    )
+PY
+[ -f "$TEST_DIR/configs/vanilla-tweaks.zip" ] || { red "datapack fixture not staged"; exit 1; }
+green "staged $TEST_DIR/configs/vanilla-tweaks.zip"
+
+# CurseForge needs a personal API key; only exercise it when one is present so
+# the suite still runs in key-less CI.
+CF_MODS=""
+if [ -n "${CURSEFORGE_API_KEY:-}${CF_API_KEY:-}" ]; then
+    green "CURSEFORGE_API_KEY present - including a curseforge mod"
+    CF_MODS=$'  - id: jei\n    provider: curseforge\n    version: latest\n'
+else
+    echo "(no CURSEFORGE_API_KEY; skipping curseforge mod in e2e yml)"
+fi
 
 cat > "$TEST_DIR/mc-snap.yml" <<EOF
 schema: 1
@@ -102,7 +155,7 @@ mods:
   - id: chunky
     provider: modrinth
     version: latest
-
+${CF_MODS}
 config:
   server.properties:
     motd: "mc-snap e2e"
@@ -110,6 +163,8 @@ config:
     server-port: $SERVER_PORT
     rcon.port: $RCON_PORT
     online-mode: false
+  files:
+    - { src: configs/vanilla-tweaks.zip, dst: world/datapacks/vanilla-tweaks.zip }
 EOF
 
 step "validate"
@@ -136,6 +191,15 @@ if ! ls "$SROOT/mods/" | grep -qi fabric-api; then
 fi
 if [ -d "$TEST_DIR/.mc-snap/server" ]; then
     red "legacy .mc-snap/server directory unexpectedly present"
+    exit 1
+fi
+if [ ! -f "$SROOT/world/datapacks/vanilla-tweaks.zip" ]; then
+    red "vanilla-tweaks.zip not installed under $SROOT/world/datapacks/"
+    ls -la "$SROOT/world/datapacks/" 2>/dev/null || true
+    exit 1
+fi
+if [ -n "$CF_MODS" ] && ! ls "$SROOT/mods/" | grep -qi jei; then
+    red "curseforge mod (jei) not in mods folder ($SROOT/mods)"
     exit 1
 fi
 green "install artifacts look correct (server root: $SROOT)"
@@ -174,6 +238,14 @@ step "rcon: list players"
 
 step "rcon: say hello"
 (cd "$TEST_DIR" && "$BIN" console say "hello from mc-snap e2e")
+
+step "rcon: datapack list (vanilla-tweaks should be enabled)"
+dp_out=$(cd "$TEST_DIR" && "$BIN" console datapack list)
+echo "$dp_out"
+echo "$dp_out" | grep -qi 'vanilla-tweaks' || {
+    red "vanilla-tweaks datapack not reported by server"
+    exit 1
+}
 
 step "logs (last lines)"
 (cd "$TEST_DIR" && "$BIN" logs | tail -n 5)
@@ -286,7 +358,11 @@ if ! ls "$UNPACK_DIR/configs/" 2>/dev/null | grep -qi chunky; then
     red "tracked config did not survive pack/unpack"
     exit 1
 fi
-green "tracked config survived round trip"
+if [ ! -f "$UNPACK_DIR/configs/vanilla-tweaks.zip" ]; then
+    red "vanilla-tweaks datapack did not survive pack/unpack"
+    exit 1
+fi
+green "tracked config + datapack survived round trip"
 
 step "validate unpacked bundle"
 (cd "$UNPACK_DIR" && "$BIN" validate)

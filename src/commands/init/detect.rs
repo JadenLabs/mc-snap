@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::providers::modrinth::Modrinth;
-use crate::yml::ModEntry;
+use crate::yml::{DatapackEntry, ModEntry};
 
 #[derive(Debug, Default)]
 pub struct Detected {
@@ -18,6 +18,8 @@ pub struct Detected {
     pub server_properties: Mapping,
     pub mods: Vec<ModEntry>,
     pub unresolved_mods: Vec<String>,
+    pub datapacks: Vec<DatapackEntry>,
+    pub unresolved_datapacks: Vec<String>,
     pub unsupported_loader: Option<&'static str>,
     /// Relative path from the cwd (where `mc-snap.yml` is written) to the detected
     /// server directory. `None` when the detect path *is* the cwd.
@@ -61,7 +63,27 @@ pub async fn detect(root: &Path, resolve_mods: bool) -> Result<Detected> {
         d.unresolved_mods = unresolved;
     }
 
+    let datapacks_dir = root
+        .join(detected_level_name(&d.server_properties))
+        .join("datapacks");
+    if datapacks_dir.is_dir() {
+        let (entries, unresolved) = detect_datapacks(&datapacks_dir, resolve_mods).await?;
+        d.datapacks = entries;
+        d.unresolved_datapacks = unresolved;
+    }
+
     Ok(d)
+}
+
+/// World directory name datapacks live under, honoring a `level-name` override
+/// from server.properties. Defaults to Minecraft's "world".
+fn detected_level_name(props: &Mapping) -> String {
+    props
+        .get(Value::String("level-name".into()))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "world".to_string())
 }
 
 fn compute_detected_location(root: &Path) -> Option<String> {
@@ -87,9 +109,7 @@ fn compute_detected_location(root: &Path) -> Option<String> {
 }
 
 fn detect_unsupported_loader(root: &Path) -> Option<&'static str> {
-    if root.join("libraries/net/minecraftforge").is_dir()
-        || glob_first(root, "forge-").is_some()
-    {
+    if root.join("libraries/net/minecraftforge").is_dir() || glob_first(root, "forge-").is_some() {
         return Some("forge");
     }
     if root.join("libraries/net/neoforged").is_dir() || glob_first(root, "neoforge-").is_some() {
@@ -316,7 +336,8 @@ fn extract_xmx(text: &str) -> Option<String> {
             }
             if j > start {
                 let mut end = j;
-                if end < bytes.len() && matches!(bytes[end], b'G' | b'g' | b'M' | b'm' | b'K' | b'k')
+                if end < bytes.len()
+                    && matches!(bytes[end], b'G' | b'g' | b'M' | b'm' | b'K' | b'k')
                 {
                     end += 1;
                 }
@@ -364,10 +385,7 @@ fn required_java_major(minecraft: Option<&str>) -> u32 {
     }
 }
 
-async fn detect_mods(
-    mods_dir: &Path,
-    resolve: bool,
-) -> Result<(Vec<ModEntry>, Vec<String>)> {
+async fn detect_mods(mods_dir: &Path, resolve: bool) -> Result<(Vec<ModEntry>, Vec<String>)> {
     let mut jars: Vec<PathBuf> = Vec::new();
     for entry in std::fs::read_dir(mods_dir)?.flatten() {
         let p = entry.path();
@@ -380,7 +398,11 @@ async fn detect_mods(
     if !resolve {
         let names = jars
             .iter()
-            .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(|s| s.to_string()))
+            .filter_map(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+            })
             .collect();
         return Ok((Vec::new(), names));
     }
@@ -406,6 +428,62 @@ async fn detect_mods(
             Ok(None) => unresolved.push(filename),
             Err(e) => {
                 tracing::warn!("modrinth lookup failed for {filename}: {e:#}");
+                unresolved.push(filename);
+            }
+        }
+    }
+    Ok((resolved, unresolved))
+}
+
+/// Scan a world `datapacks/` directory for zip archives and try to identify each
+/// one on Modrinth by jar/zip sha512. Mirrors [`detect_mods`]: unidentified packs
+/// (vanillatweaks bundles, hand-made packs) are returned as bare filenames.
+async fn detect_datapacks(
+    datapacks_dir: &Path,
+    resolve: bool,
+) -> Result<(Vec<DatapackEntry>, Vec<String>)> {
+    let mut zips: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(datapacks_dir)?.flatten() {
+        let p = entry.path();
+        if p.extension().and_then(|s| s.to_str()) == Some("zip") {
+            zips.push(p);
+        }
+    }
+    zips.sort();
+
+    if !resolve {
+        let names = zips
+            .iter()
+            .filter_map(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|s| s.to_string())
+            })
+            .collect();
+        return Ok((Vec::new(), names));
+    }
+
+    let modrinth = Modrinth::new();
+    let mut resolved = Vec::new();
+    let mut unresolved = Vec::new();
+    for zip in &zips {
+        let hash = sha512_file(zip)?;
+        let filename = zip
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("?")
+            .to_string();
+        match modrinth.lookup_by_sha512(&hash).await {
+            Ok(Some((slug, version_number))) => {
+                resolved.push(DatapackEntry::Registry {
+                    id: slug,
+                    provider: "modrinth".to_string(),
+                    version: version_number,
+                });
+            }
+            Ok(None) => unresolved.push(filename),
+            Err(e) => {
+                tracing::warn!("modrinth lookup failed for datapack {filename}: {e:#}");
                 unresolved.push(filename);
             }
         }
@@ -444,15 +522,15 @@ mod tests {
         )
         .unwrap();
         let m = parse_server_properties(&p).unwrap();
-        assert_eq!(m[Value::String("motd".into())], Value::String("Hello".into()));
+        assert_eq!(
+            m[Value::String("motd".into())],
+            Value::String("Hello".into())
+        );
         assert_eq!(
             m[Value::String("max-players".into())],
             Value::Number(20i64.into())
         );
-        assert_eq!(
-            m[Value::String("online-mode".into())],
-            Value::Bool(true)
-        );
+        assert_eq!(m[Value::String("online-mode".into())], Value::Bool(true));
     }
 
     #[test]
@@ -473,7 +551,10 @@ mod tests {
 
     #[test]
     fn extracts_xmx_with_unit() {
-        assert_eq!(extract_xmx("java -Xmx4G -jar server.jar"), Some("4G".into()));
+        assert_eq!(
+            extract_xmx("java -Xmx4G -jar server.jar"),
+            Some("4G".into())
+        );
         assert_eq!(extract_xmx("-Xmx2048M"), Some("2048M".into()));
         assert_eq!(extract_xmx("-Xmx1024"), Some("1024".into()));
         assert_eq!(extract_xmx("no flag here"), None);
@@ -507,6 +588,41 @@ mod tests {
             d.server_properties[Value::String("max-players".into())],
             Value::Number(12i64.into())
         );
+    }
+
+    #[test]
+    fn lists_datapack_zips_when_resolve_skipped() {
+        let dir = tempfile::tempdir().unwrap();
+        let dp = dir.path().join("world").join("datapacks");
+        std::fs::create_dir_all(&dp).unwrap();
+        std::fs::write(dp.join("terralith.zip"), b"fake").unwrap();
+        std::fs::write(dp.join("vault-hunters.zip"), b"fake2").unwrap();
+        std::fs::write(dp.join("readme.txt"), b"not a pack").unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let d = rt.block_on(detect(dir.path(), false)).unwrap();
+        assert!(d.datapacks.is_empty());
+        assert_eq!(
+            d.unresolved_datapacks,
+            vec!["terralith.zip".to_string(), "vault-hunters.zip".to_string()]
+        );
+    }
+
+    #[test]
+    fn datapack_dir_honors_custom_level_name() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("server.properties"), "level-name=custom\n").unwrap();
+        let dp = dir.path().join("custom").join("datapacks");
+        std::fs::create_dir_all(&dp).unwrap();
+        std::fs::write(dp.join("pack.zip"), b"fake").unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let d = rt.block_on(detect(dir.path(), false)).unwrap();
+        assert_eq!(d.unresolved_datapacks, vec!["pack.zip".to_string()]);
     }
 
     #[test]

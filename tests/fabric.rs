@@ -1,6 +1,6 @@
+use mc_snap::loaders::fabric::Fabric;
 use mc_snap::yml::Loader;
 use mc_snap::{LoaderSpec, ServerLoader};
-use mc_snap::loaders::fabric::Fabric;
 use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -25,7 +25,10 @@ async fn resolves_with_pinned_versions() {
         .await;
 
     let f = Fabric::with_base(server.uri());
-    let r = f.resolve("26.1.2", &spec(Some("0.16.9"), Some("1.0.1"))).await.unwrap();
+    let r = f
+        .resolve("26.1.2", &spec(Some("0.16.9"), Some("1.0.1")))
+        .await
+        .unwrap();
     assert_eq!(r.loader_version.as_deref(), Some("0.16.9"));
     assert_eq!(r.installer_version.as_deref(), Some("1.0.1"));
     assert_eq!(r.launch_jar, "fabric-server-launch.jar");

@@ -1,6 +1,6 @@
-use anyhow::Result;
 use crate::paths::GlobalDirs;
 use crate::runtime::java;
+use anyhow::Result;
 
 pub async fn run() -> Result<()> {
     let installs = java::discover_all();

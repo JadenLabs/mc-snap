@@ -16,10 +16,75 @@ pub struct ConfigCandidate {
     pub server_rel: String,
 }
 
-/// Walk the server's `config/` directory and return every file found, deepest
-/// last. `server_dir` is the directory that contains `config/`. Symlinks are
-/// followed but cycles are not detected; standard Minecraft setups don't have
-/// any.
+/// File extensions we treat as text-based mod configuration. Anything outside
+/// this set (jars, archives, binary state, images, logs) is skipped so
+/// `init --detect` and `config detect` don't sweep up artifacts that aren't
+/// meant to be version-controlled config.
+const CONFIG_EXTENSIONS: &[&str] = &[
+    "toml",
+    "json",
+    "json5",
+    "jsonc",
+    "yaml",
+    "yml",
+    "properties",
+    "conf",
+    "cfg",
+    "ini",
+    "txt",
+    "snbt",
+    "hocon",
+    "xml",
+    "lang",
+    "mcmeta",
+];
+
+/// Directory names under `config/` that hold generated or transient data rather
+/// than editable config. Skipped wholesale so we don't track per-world caches,
+/// rolling logs, or backups some mods drop next to their real config.
+const SKIP_DIRS: &[&str] = &[
+    "cache",
+    "caches",
+    "logs",
+    "backup",
+    "backups",
+    "crash-reports",
+];
+
+/// Decide whether a path discovered under `config/` is worth tracking. Rejects
+/// hidden files/dirs, known transient subdirectories, and anything whose
+/// extension isn't a recognized config format (this is what filters out jars).
+fn is_trackable_config(server_rel: &str) -> bool {
+    let parts: Vec<&str> = server_rel.split('/').collect();
+    for comp in &parts {
+        if comp.starts_with('.') {
+            return false;
+        }
+    }
+    // Skip files living inside a transient directory (but not the filename itself).
+    if let Some((_file, dirs)) = parts.split_last() {
+        if dirs
+            .iter()
+            .any(|d| SKIP_DIRS.contains(&d.to_ascii_lowercase().as_str()))
+        {
+            return false;
+        }
+    }
+    let Some(name) = parts.last() else {
+        return false;
+    };
+    match name.rsplit_once('.') {
+        Some((_, ext)) => CONFIG_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()),
+        None => false,
+    }
+}
+
+/// Walk the server's `config/` directory and return every config file found,
+/// deepest last. `server_dir` is the directory that contains `config/`. Files
+/// that aren't recognized config formats (jars, archives, binaries) and known
+/// transient subdirectories are filtered out; see [`is_trackable_config`].
+/// Symlinks are followed but cycles are not detected; standard Minecraft setups
+/// don't have any.
 pub fn scan_config_dir(server_dir: &Path) -> Result<Vec<ConfigCandidate>> {
     let config_dir = server_dir.join("config");
     if !config_dir.is_dir() {
@@ -27,6 +92,7 @@ pub fn scan_config_dir(server_dir: &Path) -> Result<Vec<ConfigCandidate>> {
     }
     let mut out = Vec::new();
     walk(&config_dir, server_dir, &mut out)?;
+    out.retain(|c| is_trackable_config(&c.server_rel));
     out.sort_by(|a, b| a.server_rel.cmp(&b.server_rel));
     Ok(out)
 }
@@ -66,10 +132,7 @@ pub fn untracked<'a>(
 /// Copy `candidate` from the server directory into the project's `configs/`
 /// directory, mirroring the relative path. Returns the FileRef that should be
 /// added to `snap.config.files`.
-pub fn track_candidate(
-    project_root: &Path,
-    candidate: &ConfigCandidate,
-) -> Result<FileRef> {
+pub fn track_candidate(project_root: &Path, candidate: &ConfigCandidate) -> Result<FileRef> {
     let configs_root = project_root.join("configs");
     let rel = candidate
         .server_rel
@@ -77,12 +140,15 @@ pub fn track_candidate(
         .unwrap_or(&candidate.server_rel);
     let dst_abs = configs_root.join(rel);
     if let Some(parent) = dst_abs.parent() {
-        std::fs::create_dir_all(parent).with_context(|| {
-            format!("creating {}", parent.display())
-        })?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
     }
     std::fs::copy(&candidate.abs, &dst_abs).with_context(|| {
-        format!("copying {} -> {}", candidate.abs.display(), dst_abs.display())
+        format!(
+            "copying {} -> {}",
+            candidate.abs.display(),
+            dst_abs.display()
+        )
     })?;
     let src_rel = format!("configs/{rel}");
     Ok(FileRef {
@@ -108,7 +174,10 @@ pub async fn run_detect(all: bool) -> Result<()> {
 
     let new_refs = untracked(&candidates, &snap.config.files);
     if new_refs.is_empty() {
-        println!("✓ all {} config file(s) are already tracked", candidates.len());
+        println!(
+            "✓ all {} config file(s) are already tracked",
+            candidates.len()
+        );
         return Ok(());
     }
 
@@ -155,7 +224,9 @@ fn prompt_select<'a>(candidates: &[&'a ConfigCandidate]) -> Result<Vec<&'a Confi
         labels.clone(),
     )
     .with_default(&defaults)
-    .with_help_message("everything is selected by default; deselect anything you don't want tracked")
+    .with_help_message(
+        "everything is selected by default; deselect anything you don't want tracked",
+    )
     .prompt()?;
 
     let answer_set: HashSet<&str> = answers.iter().map(|s| s.as_str()).collect();
@@ -197,6 +268,42 @@ mod tests {
         assert_eq!(out[0].server_rel, "config/chunky.toml");
         assert_eq!(out[1].server_rel, "config/luckperms/config.yml");
         assert_eq!(out[2].server_rel, "config/sub/dir/file.json5");
+    }
+
+    #[test]
+    fn scan_skips_jars_and_non_config_files() {
+        let td = TempDir::new().unwrap();
+        touch(&td.path().join("config/real.toml"), "x=1");
+        touch(&td.path().join("config/bundled-mod.jar"), "MZ");
+        touch(&td.path().join("config/world.dat"), "binary");
+        touch(&td.path().join("config/icon.png"), "img");
+        touch(&td.path().join("config/archive.zip"), "zip");
+        let out = scan_config_dir(td.path()).unwrap();
+        let rels: Vec<&str> = out.iter().map(|c| c.server_rel.as_str()).collect();
+        assert_eq!(rels, vec!["config/real.toml"]);
+    }
+
+    #[test]
+    fn scan_skips_transient_subdirs_and_hidden_files() {
+        let td = TempDir::new().unwrap();
+        touch(&td.path().join("config/keep.json"), "{}");
+        touch(&td.path().join("config/cache/lookup.json"), "{}");
+        touch(&td.path().join("config/logs/debug.txt"), "log");
+        touch(&td.path().join("config/backups/old.toml"), "x=1");
+        touch(&td.path().join("config/.hidden.toml"), "x=1");
+        let out = scan_config_dir(td.path()).unwrap();
+        let rels: Vec<&str> = out.iter().map(|c| c.server_rel.as_str()).collect();
+        assert_eq!(rels, vec!["config/keep.json"]);
+    }
+
+    #[test]
+    fn is_trackable_config_extension_allowlist() {
+        assert!(is_trackable_config("config/chunky.toml"));
+        assert!(is_trackable_config("config/pack.mcmeta"));
+        assert!(is_trackable_config("config/Mod/settings.JSON"));
+        assert!(!is_trackable_config("config/mod.jar"));
+        assert!(!is_trackable_config("config/noext"));
+        assert!(!is_trackable_config("config/cache/x.json"));
     }
 
     #[test]
@@ -249,6 +356,9 @@ mod tests {
         let fr = track_candidate(td.path(), &candidate).unwrap();
         assert_eq!(fr.src, "configs/luckperms/inner/config.yml");
         assert_eq!(fr.dst, "config/luckperms/inner/config.yml");
-        assert!(td.path().join("configs/luckperms/inner/config.yml").is_file());
+        assert!(td
+            .path()
+            .join("configs/luckperms/inner/config.yml")
+            .is_file());
     }
 }

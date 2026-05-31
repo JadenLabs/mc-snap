@@ -1,7 +1,7 @@
 use crate::compat::{self, CompatStatus};
-use anyhow::Result;
 use crate::paths::ProjectLayout;
 use crate::yml::Snap;
+use anyhow::Result;
 
 pub async fn run(target_mc: Option<String>) -> Result<()> {
     let layout = ProjectLayout::discover(&std::env::current_dir()?)?;

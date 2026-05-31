@@ -1,6 +1,6 @@
+use mc_snap::providers::modrinth::Modrinth;
 use mc_snap::yml::ModEntry;
 use mc_snap::{ModProvider, ModSpec, ResolveEnv};
-use mc_snap::providers::modrinth::Modrinth;
 use serde_json::json;
 use sha2::Digest;
 use wiremock::matchers::{method, path};
@@ -105,7 +105,10 @@ async fn resolves_pinned_version() {
     mock_file(&server, "/files/v2.jar", jar_v2.clone()).await;
 
     let p = Modrinth::with_base(server.uri());
-    let r = p.resolve(&registry_spec("0.140.0+26.1.2"), &env()).await.unwrap();
+    let r = p
+        .resolve(&registry_spec("0.140.0+26.1.2"), &env())
+        .await
+        .unwrap();
     assert_eq!(r.filename, "f2.jar");
     assert_eq!(r.sha256, mc_snap::cache::sha256_hex(&jar_v2));
 }
@@ -129,7 +132,10 @@ async fn rejects_unsupported_minecraft() {
         .await;
 
     let p = Modrinth::with_base(server.uri());
-    let err = p.resolve(&registry_spec("latest"), &env()).await.unwrap_err();
+    let err = p
+        .resolve(&registry_spec("latest"), &env())
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("does not support minecraft"));
 }
 
@@ -295,6 +301,9 @@ async fn detects_sha512_mismatch() {
     mock_file(&server, "/files/x.jar", jar).await;
 
     let p = Modrinth::with_base(server.uri());
-    let err = p.resolve(&registry_spec("latest"), &env()).await.unwrap_err();
+    let err = p
+        .resolve(&registry_spec("latest"), &env())
+        .await
+        .unwrap_err();
     assert!(err.to_string().contains("sha512 mismatch"));
 }

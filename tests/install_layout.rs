@@ -1,5 +1,5 @@
 use mc_snap::cache::sha256_hex;
-use mc_snap::lock::{Lock, LockLoader};
+use mc_snap::lock::{Lock, LockLoader, LockMod};
 use mc_snap::orchestrate;
 use mc_snap::paths::ProjectLayout;
 use mc_snap::yml::{ConfigSection, Loader, ModEntry, Server, Snap};
@@ -27,6 +27,7 @@ fn snap_with_location(loc: Option<&str>) -> Snap {
         },
         runtime: Default::default(),
         mods: Vec::<ModEntry>::new(),
+        datapacks: vec![],
         config: ConfigSection {
             server_properties: props,
             files: vec![],
@@ -59,6 +60,7 @@ fn lock_for(url: String, sha: String) -> Lock {
             extra: vec![],
         },
         mods: vec![],
+        datapacks: vec![],
         jdk: None,
     }
 }
@@ -76,7 +78,9 @@ async fn materialize_surface_level_puts_server_at_root() {
     let snap = snap_with_location(None);
     let lock = lock_for(url, sha);
 
-    orchestrate::materialize(&layout, &snap, &lock).await.unwrap();
+    orchestrate::materialize(&layout, &snap, &lock)
+        .await
+        .unwrap();
 
     assert!(td.path().join("server.jar").is_file(), "server.jar at root");
     assert!(td.path().join("eula.txt").is_file(), "eula.txt at root");
@@ -100,6 +104,102 @@ async fn materialize_surface_level_puts_server_at_root() {
     );
 }
 
+async fn mock_datapack(server: &MockServer, route: &str, bytes: &[u8]) -> (String, String) {
+    Mock::given(method("GET"))
+        .and(path(route))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes.to_vec()))
+        .mount(server)
+        .await;
+    (format!("{}{}", server.uri(), route), sha256_hex(bytes))
+}
+
+#[tokio::test]
+async fn materialize_installs_datapacks_under_world() {
+    let mock = MockServer::start().await;
+    let jar = b"FAKE_JAR_DP".to_vec();
+    let (url, sha) = mock_server_jar(&mock, &jar).await;
+    let dp = b"DATAPACK_BYTES".to_vec();
+    let (dp_url, dp_sha) = mock_datapack(&mock, "/files/terralith.zip", &dp).await;
+
+    let td = TempDir::new().unwrap();
+    let layout = ProjectLayout::at(td.path().to_path_buf());
+    std::fs::create_dir_all(layout.snap_dir()).unwrap();
+
+    let snap = snap_with_location(None);
+    let mut lock = lock_for(url, sha);
+    lock.datapacks = vec![LockMod {
+        id: "terralith".into(),
+        provider: "modrinth".into(),
+        version: "2.5.0".into(),
+        filename: "terralith.zip".into(),
+        url: dp_url,
+        sha256: dp_sha,
+    }];
+
+    orchestrate::materialize(&layout, &snap, &lock)
+        .await
+        .unwrap();
+
+    let installed = td
+        .path()
+        .join("world")
+        .join("datapacks")
+        .join("terralith.zip");
+    assert!(
+        installed.is_file(),
+        "datapack installed under world/datapacks"
+    );
+}
+
+#[tokio::test]
+async fn materialize_honors_custom_level_name_for_datapacks() {
+    let mock = MockServer::start().await;
+    let jar = b"FAKE_JAR_LEVEL".to_vec();
+    let (url, sha) = mock_server_jar(&mock, &jar).await;
+    let dp = b"DATAPACK_LEVEL".to_vec();
+    let (dp_url, dp_sha) = mock_datapack(&mock, "/files/pack.zip", &dp).await;
+
+    let td = TempDir::new().unwrap();
+    let layout = ProjectLayout::at(td.path().to_path_buf());
+    std::fs::create_dir_all(layout.snap_dir()).unwrap();
+
+    let mut snap = snap_with_location(None);
+    snap.config.server_properties.insert(
+        Value::String("level-name".into()),
+        Value::String("myworld".into()),
+    );
+    let mut lock = lock_for(url, sha);
+    lock.datapacks = vec![LockMod {
+        id: "pack".into(),
+        provider: "url".into(),
+        version: "pinned".into(),
+        filename: "pack.zip".into(),
+        url: dp_url,
+        sha256: dp_sha,
+    }];
+
+    orchestrate::materialize(&layout, &snap, &lock)
+        .await
+        .unwrap();
+
+    assert!(
+        td.path()
+            .join("myworld")
+            .join("datapacks")
+            .join("pack.zip")
+            .is_file(),
+        "datapack installed under custom level-name dir"
+    );
+    assert!(
+        !td.path()
+            .join("world")
+            .join("datapacks")
+            .join("pack.zip")
+            .exists(),
+        "no install under default world dir"
+    );
+}
+
 #[tokio::test]
 async fn materialize_with_location_puts_server_in_subdir() {
     let mock = MockServer::start().await;
@@ -113,12 +213,17 @@ async fn materialize_with_location_puts_server_in_subdir() {
     let snap = snap_with_location(Some("server"));
     let lock = lock_for(url, sha);
 
-    orchestrate::materialize(&layout, &snap, &lock).await.unwrap();
+    orchestrate::materialize(&layout, &snap, &lock)
+        .await
+        .unwrap();
 
     let sub = td.path().join("server");
     assert!(sub.join("server.jar").is_file(), "server.jar in subdir");
     assert!(sub.join("eula.txt").is_file(), "eula.txt in subdir");
-    assert!(sub.join("server.properties").is_file(), "server.properties in subdir");
+    assert!(
+        sub.join("server.properties").is_file(),
+        "server.properties in subdir"
+    );
     assert!(sub.join("mods").is_dir(), "mods/ in subdir");
 
     assert!(!td.path().join("server.jar").exists(), "no jar at root");

@@ -11,7 +11,8 @@
 | Language | Rust |
 | Scope | Setup **+** lifecycle (start/stop/logs/status) |
 | Server types (v1) | Vanilla, Fabric (extensible) |
-| Mod providers (v1) | Modrinth, Direct URL / GitHub releases (extensible) |
+| Mod providers (v1) | Modrinth, CurseForge, Direct URL / GitHub releases (extensible) |
+| Datapack sources | Modrinth, CurseForge, VanillaTweaks, Direct URL |
 | Configs | Inline overrides + external file references |
 | Bundles | Source bundle (YAML + configs, no jars) |
 | Java | Hybrid - prefer system JDK, fall back to auto-download (Adoptium Temurin) |
@@ -52,9 +53,24 @@ mods:
   - id: sodium
     provider: modrinth
     version: latest          # resolved + pinned in lockfile
+  - id: "238222"             # curseforge project id or slug
+    provider: curseforge
+    version: latest          # or a pinned file id
   - url: https://github.com/owner/repo/releases/download/v1.0/mymod.jar
     provider: url
     sha256: abc123...        # required when provider: url
+
+datapacks:                   # installed under <level-name>/datapacks/
+  - id: terralith
+    provider: modrinth       # modrinth | curseforge
+    version: latest
+  - provider: vanillatweaks  # bundles generated on demand
+    version: "26.1"
+    packs:
+      survival: [graves, afk_display]
+  - url: https://example.com/pack.zip
+    provider: url
+    sha256: def456...
 
 config:
   server.properties:         # inline overrides merged into generated file
@@ -69,6 +85,8 @@ config:
 - `minecraft:` is the Minecraft version. Pulled out into its own field rather than living next to `loader.type` so loader-specific version fields nest naturally beneath the loader.
 - `loader.type` replaces a top-level `type:` so loader-specific version fields nest naturally.
 - `provider: url` requires `sha256` - no unpinned remote downloads.
+- `provider: curseforge` needs a `CURSEFORGE_API_KEY` (or `CF_API_KEY`) env var; the v1 API gates all requests behind a personal key.
+- `datapacks:` entries are disambiguated by field presence (`packs` -> VanillaTweaks, `url`+`sha256` -> URL, `id` -> Modrinth/CurseForge registry) and install into the world's `datapacks/` directory.
 - `eula: true` will be required at the top level on first install (legal).
 
 ## Directory layout (per server)
@@ -108,7 +126,7 @@ mc-snap/
     ├── compat.rs            # update/check version comparison + mod-compat queries
     ├── props.rs             # server.properties renderer with key/value validation
     ├── yml.rs lock.rs cache.rs download.rs paths.rs proclock.rs snapshot.rs state.rs traits.rs
-    ├── providers/           # ModProvider trait + modrinth, url impls
+    ├── providers/           # ModProvider trait + modrinth, curseforge, url, vanillatweaks impls
     ├── loaders/             # ServerLoader trait + vanilla, fabric impls
     └── runtime/             # Java discovery/download, process spawn + pid/start-token tracking, RCON client
 ```
@@ -229,14 +247,14 @@ The 26.x series is the current default. Concretely, supporting it meant:
 
 ## Future scope
 
-- Plugin/datapack support for Fabric (`datapacks:`, `resourcepacks:` keys).
+- Resourcepack support (`resourcepacks:` key).
 - Additional loaders: Paper, Forge, NeoForge.
-- Additional providers: Hangar, CurseForge.
+- Additional providers: Hangar.
 
 ## Verification
 
 What ships in the repo:
 
 1. **Unit tests** colocated with each crate - schema parsing, lockfile round-trip, RCON framing, Java version parsing.
-2. **Wiremock integration tests** in `tests/` - exercise Modrinth, URL, Mojang manifest, and Fabric Meta against stubbed HTTP servers.
+2. **Wiremock integration tests** in `tests/` - exercise Modrinth, CurseForge, VanillaTweaks, URL, Mojang manifest, and Fabric Meta against stubbed HTTP servers, plus install-layout (mod + datapack materialization).
 3. **Live end-to-end** in `scripts/e2e.sh` - builds the binary, scaffolds a Fabric 26.1.2 + fabric-api server under `.dev-servers/e2e/`, runs the full lifecycle (`install` x2, `start --detach`, boot wait, `status`, `console list`, `console say`, `logs`, `stop`), then `pack` -> fresh dir -> `unpack` -> `validate`. Driven by `make e2e`.

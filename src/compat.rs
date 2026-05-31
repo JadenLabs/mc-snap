@@ -1,7 +1,7 @@
-use anyhow::Result;
 use crate::lock::Lock;
 use crate::yml::{ModEntry, Snap};
 use crate::{AvailableVersion, ResolveEnv};
+use anyhow::Result;
 use std::collections::HashSet;
 
 /// Per-mod compatibility against a target Minecraft version.
@@ -88,9 +88,7 @@ pub async fn check_against(snap: &Snap, target_mc: &str) -> Result<Vec<ModCompat
 
 /// For each registry mod, return all `game_versions` it has at least one release for
 /// on the current loader. URL mods are ignored.
-pub async fn collect_supported_mc_versions(
-    snap: &Snap,
-) -> Result<Vec<(String, HashSet<String>)>> {
+pub async fn collect_supported_mc_versions(snap: &Snap) -> Result<Vec<(String, HashSet<String>)>> {
     let env = ResolveEnv {
         minecraft: String::new(),
         loader_kind: snap.server.loader.kind.clone(),
@@ -115,10 +113,7 @@ pub async fn collect_supported_mc_versions(
 
 /// Find the newest Minecraft version supported by *every* registry mod (intersection),
 /// preferring versions newer than `current_mc`.
-pub fn newest_common_mc(
-    per_mod: &[(String, HashSet<String>)],
-    current_mc: &str,
-) -> Option<String> {
+pub fn newest_common_mc(per_mod: &[(String, HashSet<String>)], current_mc: &str) -> Option<String> {
     if per_mod.is_empty() {
         return None;
     }
@@ -136,10 +131,7 @@ pub fn newest_common_mc(
 /// For each registry mod, list versions available on the current MC newer than the
 /// locked version. "Newer" is determined by the order Modrinth returns versions
 /// (newest first), so anything appearing before the locked version is newer.
-pub async fn find_newer_versions(
-    snap: &Snap,
-    lock: &Lock,
-) -> Result<Vec<NewerVersionsReport>> {
+pub async fn find_newer_versions(snap: &Snap, lock: &Lock) -> Result<Vec<NewerVersionsReport>> {
     let env = ResolveEnv {
         minecraft: snap.server.minecraft.clone(),
         loader_kind: snap.server.loader.kind.clone(),
@@ -269,14 +261,8 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let b: HashSet<String> = ["26.1.2", "26.1.3"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let r = newest_common_mc(
-            &[("a".into(), a), ("b".into(), b)],
-            "26.1.2",
-        );
+        let b: HashSet<String> = ["26.1.2", "26.1.3"].iter().map(|s| s.to_string()).collect();
+        let r = newest_common_mc(&[("a".into(), a), ("b".into(), b)], "26.1.2");
         assert_eq!(r, Some("26.1.3".into()));
     }
 

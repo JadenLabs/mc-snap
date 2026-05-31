@@ -1,6 +1,6 @@
-use anyhow::Result;
 use crate::paths::ProjectLayout;
 use crate::yml::Snap;
+use anyhow::Result;
 use std::time::Duration;
 
 pub async fn run() -> Result<()> {

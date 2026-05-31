@@ -13,6 +13,6 @@ pub mod start;
 pub mod status;
 pub mod stop;
 pub mod unpack;
-pub mod update;
 pub mod updatable;
+pub mod update;
 pub mod validate;

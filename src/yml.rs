@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 fn de_scalar_as_string<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -94,6 +95,8 @@ pub struct Snap {
     #[serde(default)]
     pub mods: Vec<ModEntry>,
     #[serde(default)]
+    pub datapacks: Vec<DatapackEntry>,
+    #[serde(default)]
     pub config: ConfigSection,
 }
 
@@ -149,6 +152,60 @@ pub enum ModEntry {
 
 fn default_version() -> String {
     "latest".to_string()
+}
+
+/// A datapack entry. Datapacks are zip archives installed into the world's
+/// `datapacks/` directory. Mirrors [`ModEntry`]'s untagged layout: variants are
+/// disambiguated by which fields are present (`packs` -> VanillaTweaks,
+/// `url`+`sha256` -> Url, `id` -> Registry). Registry covers both Modrinth and
+/// CurseForge via the `provider` field.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum DatapackEntry {
+    /// vanillatweaks.net packs, generated on demand from a category -> pack-name map.
+    VanillaTweaks {
+        provider: String,
+        packs: BTreeMap<String, Vec<String>>,
+        #[serde(default, deserialize_with = "de_opt_scalar_as_string")]
+        version: Option<String>,
+    },
+    /// A direct download URL with a pinned sha256.
+    Url {
+        url: String,
+        provider: String,
+        sha256: String,
+        #[serde(default)]
+        filename: Option<String>,
+    },
+    /// A modrinth or curseforge project, resolved against the datapack loader.
+    Registry {
+        id: String,
+        provider: String,
+        #[serde(default = "default_version", deserialize_with = "de_scalar_as_string")]
+        version: String,
+    },
+}
+
+impl DatapackEntry {
+    pub fn provider(&self) -> &str {
+        match self {
+            DatapackEntry::VanillaTweaks { provider, .. } => provider,
+            DatapackEntry::Url { provider, .. } => provider,
+            DatapackEntry::Registry { provider, .. } => provider,
+        }
+    }
+
+    /// A short human label used in logs and progress output.
+    pub fn label(&self) -> String {
+        match self {
+            DatapackEntry::VanillaTweaks { packs, .. } => {
+                let count: usize = packs.values().map(|v| v.len()).sum();
+                format!("vanillatweaks ({count} packs)")
+            }
+            DatapackEntry::Url { url, .. } => url.clone(),
+            DatapackEntry::Registry { id, version, .. } => format!("{id} {version}"),
+        }
+    }
 }
 
 fn validate_location(loc: &str) -> anyhow::Result<()> {
@@ -218,6 +275,34 @@ impl Snap {
                 }
             }
         }
+        for dp in &self.datapacks {
+            match dp {
+                DatapackEntry::Url { sha256, .. } => {
+                    if sha256.len() != 64 || !sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+                        anyhow::bail!("url datapack entries require a 64-char hex sha256");
+                    }
+                }
+                DatapackEntry::VanillaTweaks {
+                    packs, provider, ..
+                } => {
+                    if provider != "vanillatweaks" {
+                        anyhow::bail!(
+                            "datapack with `packs` must use provider: vanillatweaks, got {provider}"
+                        );
+                    }
+                    if packs.is_empty() || packs.values().all(|v| v.is_empty()) {
+                        anyhow::bail!("vanillatweaks datapack must list at least one pack");
+                    }
+                }
+                DatapackEntry::Registry { provider, id, .. } => {
+                    if provider != "modrinth" && provider != "curseforge" {
+                        anyhow::bail!(
+                            "datapack {id} has unsupported provider {provider} (use modrinth or curseforge)"
+                        );
+                    }
+                }
+            }
+        }
         if let Some(loc) = &self.server.location {
             validate_location(loc)?;
         }
@@ -284,7 +369,8 @@ mods:
 
     #[test]
     fn rejects_wrong_schema() {
-        let bad = "schema: 2\nserver:\n  name: x\n  minecraft: 26.1.2\n  loader: { type: vanilla }\n";
+        let bad =
+            "schema: 2\nserver:\n  name: x\n  minecraft: 26.1.2\n  loader: { type: vanilla }\n";
         assert!(Snap::from_str(bad).is_err());
     }
 
@@ -311,6 +397,118 @@ mods:
     fn missing_location_defaults_to_none() {
         let snap = Snap::from_str(SAMPLE).unwrap();
         assert!(snap.server.location.is_none());
+    }
+
+    #[test]
+    fn parses_datapack_entries() {
+        let yml = r#"
+schema: 1
+server:
+  name: x
+  minecraft: 26.1.2
+  loader: { type: fabric }
+datapacks:
+  - id: terralith
+    provider: modrinth
+    version: latest
+  - id: "12345"
+    provider: curseforge
+    version: 67890
+  - provider: vanillatweaks
+    version: "1.21"
+    packs:
+      survival:
+        - graves
+        - multiplayer-sleep
+      mobs:
+        - armor-statues
+  - url: https://example.com/pack.zip
+    provider: url
+    sha256: 0000000000000000000000000000000000000000000000000000000000000000
+    filename: pack.zip
+"#;
+        let snap = Snap::from_str(yml).unwrap();
+        assert_eq!(snap.datapacks.len(), 4);
+        match &snap.datapacks[0] {
+            DatapackEntry::Registry {
+                id,
+                provider,
+                version,
+            } => {
+                assert_eq!(id, "terralith");
+                assert_eq!(provider, "modrinth");
+                assert_eq!(version, "latest");
+            }
+            _ => panic!("expected Registry"),
+        }
+        match &snap.datapacks[1] {
+            DatapackEntry::Registry {
+                provider, version, ..
+            } => {
+                assert_eq!(provider, "curseforge");
+                assert_eq!(version, "67890");
+            }
+            _ => panic!("expected Registry"),
+        }
+        match &snap.datapacks[2] {
+            DatapackEntry::VanillaTweaks {
+                provider,
+                packs,
+                version,
+            } => {
+                assert_eq!(provider, "vanillatweaks");
+                assert_eq!(version.as_deref(), Some("1.21"));
+                assert_eq!(packs["survival"], vec!["graves", "multiplayer-sleep"]);
+                assert_eq!(packs["mobs"], vec!["armor-statues"]);
+            }
+            _ => panic!("expected VanillaTweaks"),
+        }
+        match &snap.datapacks[3] {
+            DatapackEntry::Url {
+                provider, filename, ..
+            } => {
+                assert_eq!(provider, "url");
+                assert_eq!(filename.as_deref(), Some("pack.zip"));
+            }
+            _ => panic!("expected Url"),
+        }
+    }
+
+    #[test]
+    fn rejects_bad_datapack_sha() {
+        let bad = r#"
+schema: 1
+server:
+  name: x
+  minecraft: 26.1.2
+  loader: { type: vanilla }
+datapacks:
+  - url: https://example.com/x.zip
+    provider: url
+    sha256: deadbeef
+"#;
+        assert!(Snap::from_str(bad).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_vanillatweaks_packs() {
+        let bad = r#"
+schema: 1
+server:
+  name: x
+  minecraft: 26.1.2
+  loader: { type: vanilla }
+datapacks:
+  - provider: vanillatweaks
+    packs: {}
+"#;
+        assert!(Snap::from_str(bad).is_err());
+    }
+
+    #[test]
+    fn missing_datapacks_defaults_empty() {
+        let snap = Snap::from_str(SAMPLE).unwrap();
+        assert!(snap.datapacks.is_empty());
     }
 
     #[test]

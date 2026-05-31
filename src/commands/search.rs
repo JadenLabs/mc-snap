@@ -1,8 +1,8 @@
 use crate::compat;
-use anyhow::Result;
 use crate::lock::Lock;
 use crate::paths::ProjectLayout;
 use crate::yml::Snap;
+use anyhow::Result;
 
 pub async fn run() -> Result<()> {
     let layout = ProjectLayout::discover(&std::env::current_dir()?)?;
@@ -18,14 +18,23 @@ pub async fn run() -> Result<()> {
         return Ok(());
     }
 
-    println!("newer mod versions available for minecraft {}:", snap.server.minecraft);
+    println!(
+        "newer mod versions available for minecraft {}:",
+        snap.server.minecraft
+    );
     let mut any = false;
     for r in &reports {
         if r.newer.is_empty() {
             println!("  up-to-date  {:<32} {}", r.mod_id, r.current_version);
         } else {
             any = true;
-            let preview = r.newer.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+            let preview = r
+                .newer
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
             let extra = if r.newer.len() > 3 {
                 format!(" (+{} more)", r.newer.len() - 3)
             } else {

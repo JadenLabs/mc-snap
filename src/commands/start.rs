@@ -1,10 +1,10 @@
-use anyhow::{Context, Result};
 use crate::lock::Lock;
 use crate::paths::{GlobalDirs, ProjectLayout};
 use crate::proclock::ProjectLock;
-use crate::{LaunchCtx, LoaderSpec};
-use crate::yml::Snap;
 use crate::runtime::{java, process};
+use crate::yml::Snap;
+use crate::{LaunchCtx, LoaderSpec};
+use anyhow::{Context, Result};
 use tracing::info;
 
 pub async fn run(detach: bool) -> Result<()> {
@@ -24,7 +24,11 @@ pub async fn run(detach: bool) -> Result<()> {
 
     let required_major = snap.runtime.java.unwrap_or(26);
     let java_install = ensure_java(required_major).await?;
-    info!("using java {} at {}", java_install.major, java_install.bin.display());
+    info!(
+        "using java {} at {}",
+        java_install.major,
+        java_install.bin.display()
+    );
 
     let loader_impl = crate::loaders::for_kind(&snap.server.loader.kind)?;
     let server_dir = layout.server_dir_for(&snap);

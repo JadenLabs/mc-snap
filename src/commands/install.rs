@@ -1,8 +1,8 @@
 use crate::orchestrate;
-use anyhow::Result;
 use crate::paths::ProjectLayout;
 use crate::proclock::ProjectLock;
 use crate::yml::Snap;
+use anyhow::Result;
 
 pub async fn run() -> Result<()> {
     let layout = ProjectLayout::discover(&std::env::current_dir()?)?;
