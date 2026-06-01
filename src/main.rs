@@ -91,6 +91,23 @@ enum Cmd {
     },
     /// List newer mod versions available for the current Minecraft version.
     Search,
+    /// Add a mod by slug, picking the newest version compatible with the
+    /// configured Minecraft + loader, then run install. Pass multiple slugs to
+    /// add several at once. `--version` pins a specific release (single slug only).
+    Get {
+        /// Mod slug(s) on the provider (e.g. `fabric-api`, `chunky`).
+        #[arg(required = true)]
+        slugs: Vec<String>,
+        /// Pin a specific provider version instead of picking the newest.
+        #[arg(long)]
+        version: Option<String>,
+        /// Provider to query. Defaults to `modrinth`.
+        #[arg(long)]
+        provider: Option<String>,
+        /// Edit mc-snap.yml only; skip the install step.
+        #[arg(long)]
+        no_install: bool,
+    },
     /// Manage tracked config files (e.g. mod configs under <server>/config).
     Config {
         #[command(subcommand)]
@@ -147,6 +164,12 @@ async fn main() -> Result<()> {
         Cmd::Check { to } => commands::check::run(&to).await,
         Cmd::Updatable { to } => commands::updatable::run(to).await,
         Cmd::Search => commands::search::run().await,
+        Cmd::Get {
+            slugs,
+            version,
+            provider,
+            no_install,
+        } => commands::get::run(slugs, version, provider, no_install).await,
         Cmd::Config { cmd } => match cmd {
             ConfigCmd::Detect { all } => commands::config::run_detect(all).await,
         },

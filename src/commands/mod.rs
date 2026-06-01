@@ -2,6 +2,7 @@ pub mod check;
 pub mod config;
 pub mod console;
 pub mod doctor;
+pub mod get;
 pub mod init;
 pub mod install;
 pub mod logs;
