@@ -8,7 +8,7 @@ Think "docker-compose for Minecraft servers".
 
 Working: Vanilla and Fabric loaders, Modrinth / CurseForge / direct-URL mod providers, datapacks (Modrinth, CurseForge, VanillaTweaks, direct URL), install / start / stop / status / logs / console / pack / unpack / validate / doctor / check / updatable / search / update / revert, system Java discovery with Adoptium Temurin auto-download fallback, content-addressed jar cache, RCON-based lifecycle, source bundles, snapshot-based version updates.
 
-Tracks the Minecraft 26.x series; default scaffold pins 26.1.2 + Java 26. Tested on Linux with system Java 26. Windows process management and the hardlink-based cache are implemented but not CI-tested.
+Tracks the Minecraft 26.x series; default scaffold pins 26.1.2 + Java 26.
 
 ## Install
 
