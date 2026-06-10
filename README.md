@@ -116,7 +116,7 @@ The CurseForge v1 API requires a personal API key. Set `CURSEFORGE_API_KEY` (or 
 | `mc-snap init [--non-interactive]` | Interactive scaffold of a new `mc-snap.yml`; `--non-interactive` writes the default template without prompts |
 | `mc-snap validate` | Schema check, no network |
 | `mc-snap doctor` | Report discovered Java installs and cache paths |
-| `mc-snap install` | Resolve, download, materialize `.mc-snap/server/`, write lockfile |
+| `mc-snap install [--copy] [--symlink]` | Resolve, download, materialize `.mc-snap/server/`, write lockfile. By default links artifacts from the cache (symlink on Unix, hardlink on Windows); `--copy` copies them in instead, `--symlink` forces symlinks on every platform |
 | `mc-snap start [--detach]` | Start the server (foreground by default) |
 | `mc-snap stop` | Graceful stop via RCON |
 | `mc-snap restart` | `stop` then `start --detach` |

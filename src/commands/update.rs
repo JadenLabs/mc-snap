@@ -159,7 +159,8 @@ pub async fn run(
         if layout.server_dir_for(&new_snap).is_dir() {
             clean_with_old_lock_aware(&layout, &new_snap, &new_lock)?;
         }
-        orchestrate::materialize(&layout, &new_snap, &new_lock).await?;
+        orchestrate::materialize(&layout, &new_snap, &new_lock, crate::cache::LinkMode::default())
+            .await?;
         Result::<()>::Ok(())
     }
     .await;
@@ -177,7 +178,13 @@ pub async fn run(
         if let Ok(restored_lock) = crate::lock::Lock::from_path(&layout.lock()) {
             if let Ok(restored_snap) = Snap::from_path(&layout.yml()) {
                 let _ = orchestrate::clean_stale_artifacts(&layout, &restored_snap, &restored_lock);
-                let _ = orchestrate::materialize(&layout, &restored_snap, &restored_lock).await;
+                let _ = orchestrate::materialize(
+                    &layout,
+                    &restored_snap,
+                    &restored_lock,
+                    crate::cache::LinkMode::default(),
+                )
+                .await;
             }
         }
         return Err(e.context("update failed; rolled back via snapshot"));

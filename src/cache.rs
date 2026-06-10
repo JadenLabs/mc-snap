@@ -2,6 +2,18 @@ use anyhow::Context;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
+/// How cache artifacts are placed into the server directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LinkMode {
+    /// Platform default: symlink on Unix, hardlink on Windows.
+    #[default]
+    Auto,
+    /// Copy the file outright (no link back to the cache).
+    Copy,
+    /// Symlink on every platform.
+    Symlink,
+}
+
 pub struct ContentCache {
     root: PathBuf,
 }
@@ -38,7 +50,7 @@ impl ContentCache {
         }
     }
 
-    pub fn link_into(&self, sha256: &str, dst: &Path) -> anyhow::Result<()> {
+    pub fn link_into(&self, sha256: &str, dst: &Path, mode: LinkMode) -> anyhow::Result<()> {
         let src = self.path_for(sha256);
         if !src.is_file() {
             anyhow::bail!("cache miss for {sha256}");
@@ -49,18 +61,37 @@ impl ContentCache {
         if dst.exists() {
             std::fs::remove_file(dst).ok();
         }
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(&src, dst)
-                .with_context(|| format!("symlink {} -> {}", dst.display(), src.display()))?;
-        }
-        #[cfg(windows)]
-        {
-            std::fs::hard_link(&src, dst)
-                .with_context(|| format!("hardlink {} -> {}", dst.display(), src.display()))?;
+        match mode {
+            LinkMode::Copy => {
+                std::fs::copy(&src, dst)
+                    .with_context(|| format!("copy {} -> {}", src.display(), dst.display()))?;
+            }
+            LinkMode::Symlink => symlink_file(&src, dst)?,
+            LinkMode::Auto => {
+                #[cfg(unix)]
+                symlink_file(&src, dst)?;
+                #[cfg(windows)]
+                std::fs::hard_link(&src, dst)
+                    .with_context(|| format!("hardlink {} -> {}", dst.display(), src.display()))?;
+            }
         }
         Ok(())
     }
+}
+
+fn symlink_file(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(src, dst)
+        .with_context(|| format!("symlink {} -> {}", dst.display(), src.display()))?;
+    #[cfg(windows)]
+    std::os::windows::fs::symlink_file(src, dst).with_context(|| {
+        format!(
+            "symlink {} -> {} (Windows symlinks need Developer Mode or admin rights)",
+            dst.display(),
+            src.display()
+        )
+    })?;
+    Ok(())
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {

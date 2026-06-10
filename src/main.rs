@@ -30,7 +30,14 @@ enum Cmd {
         #[arg(long)]
         no_mod_resolve: bool,
     },
-    Install,
+    Install {
+        /// Copy artifacts into the server dir instead of linking them from the cache.
+        #[arg(long, conflicts_with = "symlink")]
+        copy: bool,
+        /// Symlink artifacts on every platform (default: symlink on Unix, hardlink on Windows).
+        #[arg(long)]
+        symlink: bool,
+    },
     Validate,
     Doctor,
     Start {
@@ -143,7 +150,16 @@ async fn main() -> Result<()> {
             force,
             no_mod_resolve,
         } => commands::init::run(non_interactive, detect, force, no_mod_resolve).await,
-        Cmd::Install => commands::install::run().await,
+        Cmd::Install { copy, symlink } => {
+            let mode = if copy {
+                mc_snap::cache::LinkMode::Copy
+            } else if symlink {
+                mc_snap::cache::LinkMode::Symlink
+            } else {
+                mc_snap::cache::LinkMode::Auto
+            };
+            commands::install::run(mode).await
+        }
         Cmd::Validate => commands::validate::run().await,
         Cmd::Doctor => commands::doctor::run().await,
         Cmd::Start { detach } => commands::start::run(detach).await,

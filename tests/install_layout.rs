@@ -78,7 +78,7 @@ async fn materialize_surface_level_puts_server_at_root() {
     let snap = snap_with_location(None);
     let lock = lock_for(url, sha);
 
-    orchestrate::materialize(&layout, &snap, &lock)
+    orchestrate::materialize(&layout, &snap, &lock, mc_snap::cache::LinkMode::default())
         .await
         .unwrap();
 
@@ -136,7 +136,7 @@ async fn materialize_installs_datapacks_under_world() {
         sha256: dp_sha,
     }];
 
-    orchestrate::materialize(&layout, &snap, &lock)
+    orchestrate::materialize(&layout, &snap, &lock, mc_snap::cache::LinkMode::default())
         .await
         .unwrap();
 
@@ -178,7 +178,7 @@ async fn materialize_honors_custom_level_name_for_datapacks() {
         sha256: dp_sha,
     }];
 
-    orchestrate::materialize(&layout, &snap, &lock)
+    orchestrate::materialize(&layout, &snap, &lock, mc_snap::cache::LinkMode::default())
         .await
         .unwrap();
 
@@ -213,7 +213,7 @@ async fn materialize_with_location_puts_server_in_subdir() {
     let snap = snap_with_location(Some("server"));
     let lock = lock_for(url, sha);
 
-    orchestrate::materialize(&layout, &snap, &lock)
+    orchestrate::materialize(&layout, &snap, &lock, mc_snap::cache::LinkMode::default())
         .await
         .unwrap();
 

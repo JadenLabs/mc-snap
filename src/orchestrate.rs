@@ -1,4 +1,4 @@
-use crate::cache::ContentCache;
+use crate::cache::{ContentCache, LinkMode};
 use crate::download::{fetch_into_cache, http_client};
 use crate::lock::{Lock, LockLoader, LockMod};
 use crate::paths::{GlobalDirs, ProjectLayout};
@@ -84,7 +84,12 @@ pub async fn resolve(snap: &Snap) -> Result<Lock> {
     })
 }
 
-pub async fn materialize(layout: &ProjectLayout, snap: &Snap, lock: &Lock) -> Result<()> {
+pub async fn materialize(
+    layout: &ProjectLayout,
+    snap: &Snap,
+    lock: &Lock,
+    link_mode: LinkMode,
+) -> Result<()> {
     if !snap.eula {
         anyhow::bail!(
             "Minecraft EULA not accepted. Set `eula: true` in mc-snap.yml after reading https://www.minecraft.net/en-us/eula"
@@ -121,12 +126,17 @@ pub async fn materialize(layout: &ProjectLayout, snap: &Snap, lock: &Lock) -> Re
     cache.link_into(
         &lock.loader.server_jar_sha256,
         &server_dir.join(launch_jar_name),
+        link_mode,
     )?;
 
     for m in &lock.mods {
         info!("downloading mod {} {}", m.id, m.version);
         fetch_into_cache(&client, &cache, &m.url, &m.sha256).await?;
-        cache.link_into(&m.sha256, &server_dir.join("mods").join(&m.filename))?;
+        cache.link_into(
+            &m.sha256,
+            &server_dir.join("mods").join(&m.filename),
+            link_mode,
+        )?;
     }
 
     if !lock.datapacks.is_empty() {
@@ -135,7 +145,7 @@ pub async fn materialize(layout: &ProjectLayout, snap: &Snap, lock: &Lock) -> Re
         for d in &lock.datapacks {
             info!("downloading datapack {} {}", d.id, d.version);
             fetch_into_cache(&client, &cache, &d.url, &d.sha256).await?;
-            cache.link_into(&d.sha256, &datapacks_dir.join(&d.filename))?;
+            cache.link_into(&d.sha256, &datapacks_dir.join(&d.filename), link_mode)?;
         }
     }
 

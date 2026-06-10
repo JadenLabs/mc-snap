@@ -88,7 +88,7 @@ pub async fn run(
     // Re-run install to materialize. Drop our lock first since install acquires
     // its own; the file lock is reentrant only via the same guard.
     drop(_guard);
-    crate::commands::install::run().await
+    crate::commands::install::run(crate::cache::LinkMode::default()).await
 }
 
 /// Pick a version from a provider listing. If `pinned` is Some, find an exact

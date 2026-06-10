@@ -58,7 +58,7 @@ pub async fn run(id: Option<String>, list: bool) -> Result<()> {
     if layout.server_dir_for(&snap).is_dir() {
         orchestrate::clean_stale_artifacts(&layout, &snap, &lock)?;
     }
-    orchestrate::materialize(&layout, &snap, &lock).await?;
+    orchestrate::materialize(&layout, &snap, &lock, crate::cache::LinkMode::default()).await?;
 
     let from = snap_record.meta.from_minecraft.as_deref().unwrap_or("?");
     println!("reverted to minecraft {from} ({} mods)", snap.mods.len());
