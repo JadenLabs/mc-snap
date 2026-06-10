@@ -18,18 +18,19 @@ pub fn discover_all() -> Vec<JavaInstall> {
         }
     };
 
+    let java_bin = java_binary_name();
     if let Ok(home) = std::env::var("JAVA_HOME") {
-        try_path(PathBuf::from(home).join("bin").join("java"));
+        try_path(PathBuf::from(home).join("bin").join(java_bin));
     }
     if let Ok(path) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path) {
-            try_path(dir.join("java"));
+            try_path(dir.join(java_bin));
         }
     }
     for base in linux_jvm_dirs() {
         if let Ok(rd) = std::fs::read_dir(&base) {
             for entry in rd.flatten() {
-                try_path(entry.path().join("bin").join("java"));
+                try_path(entry.path().join("bin").join(java_bin));
             }
         }
     }

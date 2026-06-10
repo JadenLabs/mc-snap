@@ -56,7 +56,22 @@ require() {
     fi
 }
 require java
-require python3
+
+# Pick a Python interpreter that actually runs. On Windows `python3` often
+# resolves to the Microsoft Store stub, which is on PATH but exits with an
+# error when invoked, so probing with `command -v` isn't enough - we have to
+# execute each candidate and keep the first that works.
+PYTHON=""
+for cand in python3 python py; do
+    if command -v "$cand" >/dev/null 2>&1 && "$cand" -c "import sys" >/dev/null 2>&1; then
+        PYTHON="$cand"
+        break
+    fi
+done
+if [ -z "$PYTHON" ]; then
+    red "missing required tool: a working python (tried python3, python, py)"
+    exit 2
+fi
 
 step "build"
 (cd "$ROOT" && cargo build --quiet)
@@ -84,7 +99,7 @@ step "stage vanilla tweaks datapack fixture"
 # For the e2e we synthesize a minimal datapack with a load.mcfunction so we
 # can verify it gets picked up by the server's datapack scanner. supported_formats
 # is wide-open so any modern MC accepts it.
-python3 - "$TEST_DIR/configs/vanilla-tweaks.zip" <<'PY'
+"$PYTHON" - "$TEST_DIR/configs/vanilla-tweaks.zip" <<'PY'
 import json
 import sys
 import zipfile
