@@ -71,7 +71,9 @@ impl Rcon {
         let mut len_buf = [0u8; 4];
         self.stream.read_exact(&mut len_buf).await?;
         let length = i32::from_le_bytes(len_buf);
-        if !(10..=4096).contains(&length) {
+        // Minecraft caps the response body at 4096 bytes; the length field also
+        // covers id (4) + type (4) + two NUL terminators, so 4106 is the real max.
+        if !(10..=4106).contains(&length) {
             bail!("rcon packet length out of range: {length}");
         }
         let mut payload = vec![0u8; length as usize];

@@ -27,10 +27,7 @@ impl Default for VanillaTweaks {
 impl VanillaTweaks {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .user_agent(concat!("mc-snap/", env!("CARGO_PKG_VERSION")))
-                .build()
-                .expect("client"),
+            client: crate::download::http_client().expect("client"),
             base: SITE.to_string(),
         }
     }
@@ -81,14 +78,7 @@ impl VanillaTweaks {
         };
 
         let bytes = crate::download::fetch_bytes(&self.client, &url).await?;
-        let sha256 = crate::cache::sha256_hex(&bytes);
-        if let Ok(globals) = crate::paths::GlobalDirs::resolve() {
-            let _ = globals.ensure();
-            let cache = crate::cache::ContentCache::new(globals.cache);
-            if !cache.contains(&sha256) {
-                let _ = cache.store(&sha256, &bytes);
-            }
-        }
+        let sha256 = crate::download::prime_cache(&bytes);
 
         let filename = url
             .rsplit('/')

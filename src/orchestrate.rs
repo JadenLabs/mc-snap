@@ -57,7 +57,7 @@ pub async fn resolve(snap: &Snap) -> Result<Lock> {
         });
     }
 
-    let yml_hash = sha256_of_string(&serde_yml::to_string(snap)?);
+    let yml_hash = yml_hash(snap)?;
     Ok(Lock {
         schema: 1,
         yml_hash,
@@ -130,6 +130,9 @@ pub async fn materialize(
     )?;
 
     for m in &lock.mods {
+        // The lockfile may come from an untrusted bundle and the filename from a
+        // remote registry; never let either pick a path outside mods/.
+        crate::yml::validate_artifact_filename(&format!("mod {}", m.id), &m.filename)?;
         info!("downloading mod {} {}", m.id, m.version);
         fetch_into_cache(&client, &cache, &m.url, &m.sha256).await?;
         cache.link_into(
@@ -143,6 +146,7 @@ pub async fn materialize(
         let datapacks_dir = server_dir.join(level_name(snap)).join("datapacks");
         std::fs::create_dir_all(&datapacks_dir)?;
         for d in &lock.datapacks {
+            crate::yml::validate_artifact_filename(&format!("datapack {}", d.id), &d.filename)?;
             info!("downloading datapack {} {}", d.id, d.version);
             fetch_into_cache(&client, &cache, &d.url, &d.sha256).await?;
             cache.link_into(&d.sha256, &datapacks_dir.join(&d.filename), link_mode)?;
@@ -248,8 +252,13 @@ fn now_rfc3339() -> String {
     format!("@{secs}")
 }
 
-fn sha256_of_string(s: &str) -> String {
-    crate::cache::sha256_hex(s.as_bytes())
+/// Hash of the snap's canonical serialization, recorded in the lockfile so
+/// `install` can tell whether the lock still matches the yml. Computed from the
+/// parsed struct, not the raw file, so reformatting doesn't invalidate the lock.
+pub fn yml_hash(snap: &Snap) -> Result<String> {
+    Ok(crate::cache::sha256_hex(
+        serde_yml::to_string(snap)?.as_bytes(),
+    ))
 }
 
 /// Resolve the world directory name datapacks install under, honoring a
@@ -460,11 +469,21 @@ mod tests {
 }
 
 pub fn rcon_address(snap: &Snap) -> String {
-    let port = snap
-        .config
-        .server_properties
-        .get("rcon.port")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(25575);
+    let port = port_property(snap, "rcon.port", 25575);
     format!("127.0.0.1:{port}")
+}
+
+/// Read a port number from server.properties overrides, accepting either a
+/// YAML integer or a quoted string ("25575").
+pub fn port_property(snap: &Snap, key: &str, default: u16) -> u16 {
+    snap.config
+        .server_properties
+        .get(key)
+        .and_then(|v| match v {
+            serde_yml::Value::Number(n) => n.as_i64(),
+            serde_yml::Value::String(s) => s.trim().parse::<i64>().ok(),
+            _ => None,
+        })
+        .and_then(|n| u16::try_from(n).ok())
+        .unwrap_or(default)
 }

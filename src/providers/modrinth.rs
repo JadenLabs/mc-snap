@@ -19,10 +19,7 @@ impl Default for Modrinth {
 impl Modrinth {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .user_agent(concat!("mc-snap/", env!("CARGO_PKG_VERSION")))
-                .build()
-                .expect("client"),
+            client: crate::download::http_client().expect("client"),
             base: API.to_string(),
         }
     }
@@ -154,14 +151,7 @@ impl ModProvider for Modrinth {
             .or_else(|| chosen.files.first())
             .ok_or_else(|| anyhow::anyhow!("modrinth version {} has no files", chosen.id))?;
 
-        let bytes = self
-            .client
-            .get(&file.url)
-            .send()
-            .await?
-            .error_for_status()?
-            .bytes()
-            .await?;
+        let bytes = crate::download::fetch_bytes(&self.client, &file.url).await?;
 
         use sha2::Digest;
         let mut h = sha2::Sha512::new();
@@ -174,15 +164,7 @@ impl ModProvider for Modrinth {
                 file.hashes.sha512
             );
         }
-        let sha256 = crate::cache::sha256_hex(&bytes);
-
-        if let Ok(globals) = crate::paths::GlobalDirs::resolve() {
-            let _ = globals.ensure();
-            let cache = crate::cache::ContentCache::new(globals.cache);
-            if !cache.contains(&sha256) {
-                let _ = cache.store(&sha256, &bytes);
-            }
-        }
+        let sha256 = crate::download::prime_cache(&bytes);
 
         Ok(ResolvedMod {
             id,

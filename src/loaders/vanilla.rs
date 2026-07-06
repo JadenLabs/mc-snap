@@ -27,10 +27,7 @@ impl Default for Vanilla {
 impl Vanilla {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .user_agent(concat!("mc-snap/", env!("CARGO_PKG_VERSION")))
-                .build()
-                .expect("client"),
+            client: crate::download::http_client().expect("client"),
             manifest_url: MANIFEST.to_string(),
         }
     }
@@ -101,14 +98,7 @@ impl ServerLoader for Vanilla {
             .json()
             .await?;
 
-        let bytes = self
-            .client
-            .get(&meta.downloads.server.url)
-            .send()
-            .await?
-            .error_for_status()?
-            .bytes()
-            .await?;
+        let bytes = crate::download::fetch_bytes(&self.client, &meta.downloads.server.url).await?;
         // Verify Mojang's published sha1 before we trust the bytes. Without this the
         // lockfile's sha256 is just "the hash of whatever the server returned", which
         // proves nothing.
@@ -122,7 +112,8 @@ impl ServerLoader for Vanilla {
                 got_sha1
             );
         }
-        let sha256 = crate::cache::sha256_hex(&bytes);
+        // Prime the cache with the verified bytes so materialize doesn't refetch.
+        let sha256 = crate::download::prime_cache(&bytes);
 
         Ok(ResolvedLoader {
             kind: "vanilla".into(),

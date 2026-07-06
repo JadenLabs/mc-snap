@@ -76,6 +76,21 @@ pub async fn fetch_into_cache(
     cache.store(expected_sha256, &bytes)
 }
 
+/// Content-address `bytes` into the global cache (best-effort) so the install
+/// step's `fetch_into_cache` short-circuits instead of re-downloading. Returns
+/// the sha256 of the bytes either way.
+pub fn prime_cache(bytes: &[u8]) -> String {
+    let sha256 = sha256_hex(bytes);
+    if let Ok(globals) = crate::paths::GlobalDirs::resolve() {
+        let _ = globals.ensure();
+        let cache = ContentCache::new(globals.cache);
+        if !cache.contains(&sha256) {
+            let _ = cache.store(&sha256, bytes);
+        }
+    }
+    sha256
+}
+
 pub fn http_client() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .user_agent(concat!("mc-snap/", env!("CARGO_PKG_VERSION")))

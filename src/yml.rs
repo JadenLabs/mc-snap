@@ -213,21 +213,44 @@ fn validate_location(loc: &str) -> anyhow::Result<()> {
     if trimmed.is_empty() || trimmed == "." {
         return Ok(());
     }
-    let p = Path::new(trimmed);
+    validate_rel_path("server.location", trimmed)
+}
+
+/// Reject absolute paths and `..` components. Used for every yml field that is
+/// later joined onto the project root or server dir; a shared bundle's yml is
+/// untrusted input, so none of these may escape the project.
+fn validate_rel_path(field: &str, raw: &str) -> anyhow::Result<()> {
+    let p = Path::new(raw);
     if p.is_absolute() {
-        anyhow::bail!("server.location must be a relative path, got {trimmed}");
+        anyhow::bail!("{field} must be a relative path, got {raw}");
     }
     for comp in p.components() {
         use std::path::Component;
         match comp {
             Component::ParentDir => {
-                anyhow::bail!("server.location must not contain `..`")
+                anyhow::bail!("{field} must not contain `..`: {raw}")
             }
             Component::Prefix(_) | Component::RootDir => {
-                anyhow::bail!("server.location must be a relative path")
+                anyhow::bail!("{field} must be a relative path, got {raw}")
             }
             _ => {}
         }
+    }
+    Ok(())
+}
+
+/// A downloaded artifact's on-disk name must be a single plain filename; it is
+/// joined into `mods/` or `<world>/datapacks/`, so separators or `..` would let
+/// a hostile lockfile or registry response write outside the server dir.
+pub fn validate_artifact_filename(context: &str, name: &str) -> anyhow::Result<()> {
+    if name.trim().is_empty() {
+        anyhow::bail!("{context}: filename must not be empty");
+    }
+    if name.contains('/') || name.contains('\\') {
+        anyhow::bail!("{context}: filename must not contain path separators, got {name:?}");
+    }
+    if name == "." || name == ".." {
+        anyhow::bail!("{context}: filename must not be a dot path, got {name:?}");
     }
     Ok(())
 }
@@ -269,9 +292,15 @@ impl Snap {
             anyhow::bail!("server.minecraft must not be empty");
         }
         for entry in &self.mods {
-            if let ModEntry::Url { sha256, .. } = entry {
+            if let ModEntry::Url {
+                sha256, filename, ..
+            } = entry
+            {
                 if sha256.len() != 64 || !sha256.chars().all(|c| c.is_ascii_hexdigit()) {
                     anyhow::bail!("url mod entries require a 64-char hex sha256");
+                }
+                if let Some(f) = filename {
+                    validate_artifact_filename("url mod entry", f)?;
                 }
             }
         }
@@ -305,6 +334,13 @@ impl Snap {
         }
         if let Some(loc) = &self.server.location {
             validate_location(loc)?;
+        }
+        // config.files paths are joined onto the project root / server dir at
+        // install time; a bundle's yml must not be able to read or write
+        // outside the project.
+        for f in &self.config.files {
+            validate_rel_path("config.files src", &f.src)?;
+            validate_rel_path("config.files dst", &f.dst)?;
         }
         Ok(())
     }
@@ -509,6 +545,61 @@ datapacks:
     fn missing_datapacks_defaults_empty() {
         let snap = Snap::from_str(SAMPLE).unwrap();
         assert!(snap.datapacks.is_empty());
+    }
+
+    #[test]
+    fn rejects_traversal_in_config_files() {
+        let bad_dst = r#"
+schema: 1
+server:
+  name: x
+  minecraft: 26.1.2
+  loader: { type: vanilla }
+config:
+  files:
+    - { src: configs/a.toml, dst: ../../escape.toml }
+"#;
+        assert!(Snap::from_str(bad_dst).is_err());
+
+        let bad_src = r#"
+schema: 1
+server:
+  name: x
+  minecraft: 26.1.2
+  loader: { type: vanilla }
+config:
+  files:
+    - { src: /etc/passwd, dst: config/a.toml }
+"#;
+        assert!(Snap::from_str(bad_src).is_err());
+    }
+
+    #[test]
+    fn rejects_separator_in_url_mod_filename() {
+        let bad = r#"
+schema: 1
+server:
+  name: x
+  minecraft: 26.1.2
+  loader: { type: vanilla }
+mods:
+  - url: https://example.com/x.jar
+    provider: url
+    sha256: 0000000000000000000000000000000000000000000000000000000000000000
+    filename: ../evil.jar
+"#;
+        assert!(Snap::from_str(bad).is_err());
+    }
+
+    #[test]
+    fn validate_artifact_filename_rules() {
+        assert!(validate_artifact_filename("t", "mod.jar").is_ok());
+        assert!(validate_artifact_filename("t", "a b (1.2).jar").is_ok());
+        assert!(validate_artifact_filename("t", "").is_err());
+        assert!(validate_artifact_filename("t", "  ").is_err());
+        assert!(validate_artifact_filename("t", "..").is_err());
+        assert!(validate_artifact_filename("t", "a/b.jar").is_err());
+        assert!(validate_artifact_filename("t", "a\\b.jar").is_err());
     }
 
     #[test]

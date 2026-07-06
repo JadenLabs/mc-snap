@@ -20,10 +20,7 @@ impl Default for Fabric {
 impl Fabric {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .user_agent(concat!("mc-snap/", env!("CARGO_PKG_VERSION")))
-                .build()
-                .expect("client"),
+            client: crate::download::http_client().expect("client"),
             base: META.to_string(),
         }
     }
@@ -100,15 +97,9 @@ impl ServerLoader for Fabric {
             "{}/versions/loader/{minecraft}/{loader}/{installer}/server/jar",
             self.base
         );
-        let bytes = self
-            .client
-            .get(&url)
-            .send()
-            .await?
-            .error_for_status()?
-            .bytes()
-            .await?;
-        let sha256 = crate::cache::sha256_hex(&bytes);
+        let bytes = crate::download::fetch_bytes(&self.client, &url).await?;
+        // Prime the cache with the verified bytes so materialize doesn't refetch.
+        let sha256 = crate::download::prime_cache(&bytes);
 
         Ok(ResolvedLoader {
             kind: "fabric".into(),

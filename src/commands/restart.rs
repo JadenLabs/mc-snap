@@ -11,12 +11,7 @@ pub async fn run() -> Result<()> {
     // Probe the configured server port and wait briefly for it to become free.
     if let Ok(layout) = ProjectLayout::discover(&std::env::current_dir()?) {
         if let Ok(snap) = Snap::from_path(&layout.yml()) {
-            let port = snap
-                .config
-                .server_properties
-                .get("server-port")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(25565) as u16;
+            let port = crate::orchestrate::port_property(&snap, "server-port", 25565);
             wait_for_port_free(port, Duration::from_secs(10)).await;
         }
     }
