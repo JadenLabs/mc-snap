@@ -7,6 +7,7 @@ use serde_yml::{Mapping, Value};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
+use crate::style;
 use crate::yml::{ConfigSection, DatapackEntry, FileRef, Loader, ModEntry, Runtime, Server, Snap};
 use detect::Detected;
 
@@ -78,8 +79,9 @@ pub async fn run(
         }
         println!();
         println!(
-            "\x1b[1;36m  mc-snap\x1b[0m \x1b[2m- detecting in {}\x1b[0m",
-            root.display()
+            "{} {}",
+            style::heading("  mc-snap"),
+            style::dim(&format!("- detecting in {}", root.display()))
         );
         let d = detect::detect(&root, !no_mod_resolve).await?;
         print_detection_summary(&d, no_mod_resolve);
@@ -105,13 +107,16 @@ pub async fn run(
 
     println!();
     println!(
-        "\x1b[1;32m✓\x1b[0m created \x1b[1m{}\x1b[0m",
-        target.display()
+        "{} created {}",
+        style::ok(),
+        style::bold(&target.display().to_string())
     );
     println!(
-        "  next: review the file, set \x1b[1meula: true\x1b[0m after reading \x1b[36mhttps://www.minecraft.net/en-us/eula\x1b[0m,"
+        "  next: review the file, set {} after reading {},",
+        style::bold("eula: true"),
+        style::cyan("https://www.minecraft.net/en-us/eula")
     );
-    println!("        then run \x1b[1mmc-snap install\x1b[0m");
+    println!("        then run {}", style::bold("mc-snap install"));
     Ok(())
 }
 
@@ -124,14 +129,17 @@ fn print_gitignore_hint(location: Option<&str>) {
     };
     println!();
     println!(
-        "\x1b[2m  hint: server artifacts will land at {}\x1b[0m",
-        if prefix.is_empty() {
-            "the project root".to_string()
-        } else {
-            format!("./{prefix}")
-        }
+        "{}",
+        style::dim(&format!(
+            "  hint: server artifacts will land at {}",
+            if prefix.is_empty() {
+                "the project root".to_string()
+            } else {
+                format!("./{prefix}")
+            }
+        ))
     );
-    println!("\x1b[2m        consider adding to .gitignore:\x1b[0m");
+    println!("{}", style::dim("        consider adding to .gitignore:"));
     for entry in [
         "world/",
         "world_nether/",
@@ -148,13 +156,13 @@ fn print_gitignore_hint(location: Option<&str>) {
         "banned-ips.json",
         "whitelist.json",
     ] {
-        println!("\x1b[2m          {prefix}{entry}\x1b[0m");
+        println!("{}", style::dim(&format!("          {prefix}{entry}")));
     }
 }
 
 fn print_detection_summary(d: &Detected, no_mod_resolve: bool) {
-    let bullet = "\x1b[1;32m✓\x1b[0m";
-    let warn = "\x1b[1;33m!\x1b[0m";
+    let bullet = style::ok();
+    let warn = style::warn_glyph();
     if let Some(unsup) = d.unsupported_loader {
         println!(
             "  {warn} detected {} server - mc-snap currently supports only vanilla and fabric",
@@ -198,7 +206,7 @@ fn print_detection_summary(d: &Detected, no_mod_resolve: bool) {
                 d.unresolved_mods.len()
             );
             for name in &d.unresolved_mods {
-                println!("    \x1b[2m-\x1b[0m {name}");
+                println!("    {} {name}", style::dim("-"));
             }
         }
     }
@@ -215,7 +223,7 @@ fn print_detection_summary(d: &Detected, no_mod_resolve: bool) {
                 d.unresolved_datapacks.len()
             );
             for name in &d.unresolved_datapacks {
-                println!("    \x1b[2m-\x1b[0m {name}");
+                println!("    {} {name}", style::dim("-"));
             }
         }
     }
@@ -235,8 +243,15 @@ fn wizard(cwd: &Path, detected: Option<&Detected>) -> Result<String> {
         .unwrap_or_else(|| "my-server".to_string());
 
     println!();
-    println!("\x1b[1;36m  mc-snap\x1b[0m \x1b[2m- new server config\x1b[0m");
-    println!("\x1b[2m  arrow keys to navigate, enter to confirm, ctrl-c to cancel\x1b[0m");
+    println!(
+        "{} {}",
+        style::heading("  mc-snap"),
+        style::dim("- new server config")
+    );
+    println!(
+        "{}",
+        style::dim("  arrow keys to navigate, enter to confirm, ctrl-c to cancel")
+    );
     println!();
 
     let name = Text::new("Server name")
@@ -383,9 +398,13 @@ fn scan_and_select_configs(cwd: &Path, snap: &Snap, detected: &Detected) -> Resu
 
     println!();
     println!(
-        "\x1b[1;36m  config\x1b[0m \x1b[2m- found {} file(s) under {}/\x1b[0m",
-        candidates.len(),
-        server_dir.join("config").display()
+        "{} {}",
+        style::heading("  config"),
+        style::dim(&format!(
+            "- found {} file(s) under {}/",
+            candidates.len(),
+            server_dir.join("config").display()
+        ))
     );
 
     let labels: Vec<String> = candidates.iter().map(|c| c.server_rel.clone()).collect();

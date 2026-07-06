@@ -6,8 +6,11 @@ pub async fn run() -> Result<()> {
     let layout = ProjectLayout::discover(&std::env::current_dir()?)?;
     let snap = Snap::from_path(&layout.yml())?;
     println!(
-        "ok: {} (mc {}, loader {})",
-        snap.server.name, snap.server.minecraft, snap.server.loader.kind
+        "{} {} is valid (mc {}, loader {})",
+        crate::style::ok(),
+        crate::style::bold(&snap.server.name),
+        snap.server.minecraft,
+        snap.server.loader.kind
     );
     Ok(())
 }

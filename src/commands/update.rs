@@ -159,8 +159,13 @@ pub async fn run(
         if layout.server_dir_for(&new_snap).is_dir() {
             clean_with_old_lock_aware(&layout, &new_snap, &new_lock)?;
         }
-        orchestrate::materialize(&layout, &new_snap, &new_lock, crate::cache::LinkMode::default())
-            .await?;
+        orchestrate::materialize(
+            &layout,
+            &new_snap,
+            &new_lock,
+            crate::cache::LinkMode::default(),
+        )
+        .await?;
         Result::<()>::Ok(())
     }
     .await;
@@ -191,8 +196,9 @@ pub async fn run(
     }
 
     println!(
-        "updated {} from {} to {} ({} mods, {} skipped). revert with `mc-snap revert {}`",
-        new_snap.server.name,
+        "{} updated {} from {} to {} ({} mods, {} skipped). revert with `mc-snap revert {}`",
+        crate::style::ok(),
+        crate::style::bold(&new_snap.server.name),
         current_mc,
         target_mc,
         new_snap.mods.len(),

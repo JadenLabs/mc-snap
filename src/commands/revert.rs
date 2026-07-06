@@ -61,6 +61,10 @@ pub async fn run(id: Option<String>, list: bool) -> Result<()> {
     orchestrate::materialize(&layout, &snap, &lock, crate::cache::LinkMode::default()).await?;
 
     let from = snap_record.meta.from_minecraft.as_deref().unwrap_or("?");
-    println!("reverted to minecraft {from} ({} mods)", snap.mods.len());
+    println!(
+        "{} reverted to minecraft {from} ({} mods)",
+        crate::style::ok(),
+        snap.mods.len()
+    );
     Ok(())
 }

@@ -39,7 +39,7 @@ pub async fn run() -> Result<()> {
 
     if process::wait_for_exit(pid, Duration::from_secs(20)).await {
         process::clear_pid(&layout.pid_file());
-        println!("stopped");
+        println!("{} stopped", crate::style::ok());
         return Ok(());
     }
 
@@ -47,13 +47,13 @@ pub async fn run() -> Result<()> {
     process::signal_term(pid)?;
     if process::wait_for_exit(pid, Duration::from_secs(10)).await {
         process::clear_pid(&layout.pid_file());
-        println!("stopped (term)");
+        println!("{} stopped (term)", crate::style::ok());
         return Ok(());
     }
 
     warn!("sending SIGKILL to {pid}");
     process::signal_kill(pid)?;
     process::clear_pid(&layout.pid_file());
-    println!("stopped (kill)");
+    println!("{} stopped (kill)", crate::style::ok());
     Ok(())
 }

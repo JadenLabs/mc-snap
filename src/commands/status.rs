@@ -9,8 +9,12 @@ pub async fn run() -> Result<()> {
     let snap = Snap::from_path(&layout.yml())?;
     let pid = process::read_pid(&layout.pid_file());
     match pid {
-        Some(p) if process::is_running(p) => {
-            println!("{}: running (pid {p})", snap.server.name);
+        Some(p) if process::is_running_recorded(&layout.pid_file(), p) => {
+            println!(
+                "{}: {} (pid {p})",
+                crate::style::bold(&snap.server.name),
+                crate::style::green("running")
+            );
             if let Ok(pw) = orchestrate::read_rcon_password(&layout) {
                 let addr = orchestrate::rcon_address(&snap);
                 if let Ok(mut r) = rcon::Rcon::connect(&addr, &pw).await {
@@ -21,7 +25,11 @@ pub async fn run() -> Result<()> {
             }
         }
         _ => {
-            println!("{}: stopped", snap.server.name);
+            println!(
+                "{}: {}",
+                crate::style::bold(&snap.server.name),
+                crate::style::dim("stopped")
+            );
         }
     }
     Ok(())

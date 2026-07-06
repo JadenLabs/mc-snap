@@ -15,7 +15,12 @@ pub async fn run(command: Vec<String>) -> Result<()> {
         use std::io::{BufRead, Write};
         let stdin = std::io::stdin();
         let mut stdout = std::io::stdout();
-        println!("connected to {addr}. type commands, ctrl-d to exit.");
+        let eof_hint = if cfg!(windows) {
+            "ctrl-z then enter"
+        } else {
+            "ctrl-d"
+        };
+        println!("connected to {addr}. type commands, {eof_hint} to exit.");
         loop {
             print!("> ");
             stdout.flush().ok();
@@ -27,9 +32,14 @@ pub async fn run(command: Vec<String>) -> Result<()> {
             if trimmed.is_empty() {
                 continue;
             }
-            let out = r.exec(trimmed).await?;
-            if !out.is_empty() {
-                println!("{out}");
+            // A failed command shouldn't kill the whole shell; report and keep going.
+            match r.exec(trimmed).await {
+                Ok(out) => {
+                    if !out.is_empty() {
+                        println!("{out}");
+                    }
+                }
+                Err(e) => eprintln!("error: {e:#}"),
             }
         }
     } else {

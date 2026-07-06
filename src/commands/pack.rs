@@ -19,7 +19,11 @@ pub async fn run(out: &str) -> Result<()> {
         add_dir(&mut zw, &layout.root, &layout.configs_dir(), opts)?;
     }
     zw.finish()?;
-    println!("wrote {}", out_path.display());
+    println!(
+        "{} wrote {}",
+        crate::style::ok(),
+        crate::style::bold(&out_path.display().to_string())
+    );
     Ok(())
 }
 

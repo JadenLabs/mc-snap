@@ -5,6 +5,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use crate::paths::ProjectLayout;
+use crate::style;
 use crate::yml::{FileRef, Snap};
 
 /// A config file discovered under a server's `config/` directory.
@@ -175,7 +176,8 @@ pub async fn run_detect(all: bool) -> Result<()> {
     let new_refs = untracked(&candidates, &snap.config.files);
     if new_refs.is_empty() {
         println!(
-            "✓ all {} config file(s) are already tracked",
+            "{} all {} config file(s) are already tracked",
+            style::ok(),
             candidates.len()
         );
         return Ok(());
@@ -206,11 +208,12 @@ pub async fn run_detect(all: bool) -> Result<()> {
 
     println!();
     println!(
-        "\x1b[1;32m✓\x1b[0m tracked {} config file(s); copied into ./configs/",
+        "{} tracked {} config file(s); copied into ./configs/",
+        style::ok(),
         added.len()
     );
     for f in &added {
-        println!("  \x1b[2m+\x1b[0m {} -> {}", f.dst, f.src);
+        println!("  {} {} -> {}", style::dim("+"), f.dst, f.src);
     }
     Ok(())
 }

@@ -25,6 +25,7 @@ pub mod commands;
 pub mod compat;
 pub mod orchestrate;
 pub mod props;
+pub mod style;
 
 pub use traits::{
     AvailableVersion, LaunchCtx, LoaderSpec, ModProvider, ModSpec, ResolveEnv, ResolvedLoader,

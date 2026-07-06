@@ -50,7 +50,11 @@ pub async fn run(detach: bool) -> Result<()> {
 
     if detach {
         let pid = process::spawn_detached(cmd, &layout.pid_file())?;
-        println!("started {} (pid {pid})", snap.server.name);
+        println!(
+            "{} started {} (pid {pid})",
+            crate::style::ok(),
+            crate::style::bold(&snap.server.name)
+        );
     } else {
         let code = process::run_foreground(cmd).await?;
         println!("server exited with code {code}");
