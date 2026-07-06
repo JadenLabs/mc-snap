@@ -4,13 +4,36 @@ use std::path::{Component, Path, PathBuf};
 
 const MAX_BUNDLE_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
-pub async fn run(bundle: &str) -> Result<()> {
+pub async fn run(bundle: &str, force: bool) -> Result<()> {
     let path = PathBuf::from(bundle);
     let f =
         std::fs::File::open(&path).with_context(|| format!("opening bundle {}", path.display()))?;
     let mut zf = zip::ZipArchive::new(f)?;
     let dst = std::env::current_dir()?;
     let dst_canon = dst.canonicalize().unwrap_or(dst.clone());
+
+    // Refuse to clobber existing files unless asked to; a bundle silently
+    // overwriting a project's mc-snap.yml is easy to miss.
+    if !force {
+        let mut collisions = Vec::new();
+        for i in 0..zf.len() {
+            let entry = zf.by_index(i)?;
+            if entry.is_dir() {
+                continue;
+            }
+            if let Some(name) = entry.enclosed_name() {
+                if dst_canon.join(&name).exists() {
+                    collisions.push(name.display().to_string());
+                }
+            }
+        }
+        if !collisions.is_empty() {
+            bail!(
+                "refusing to overwrite existing file(s): {} (re-run with --force to overwrite)",
+                collisions.join(", ")
+            );
+        }
+    }
 
     for i in 0..zf.len() {
         let mut entry = zf.by_index(i)?;
@@ -53,7 +76,12 @@ pub async fn run(bundle: &str) -> Result<()> {
         std::fs::write(&out_path, &buf)?;
     }
 
-    println!("extracted {} to {}", path.display(), dst.display());
+    println!(
+        "{} extracted {} to {}",
+        crate::style::ok(),
+        path.display(),
+        dst.display()
+    );
     Ok(())
 }
 

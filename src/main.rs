@@ -30,6 +30,8 @@ enum Cmd {
         #[arg(long)]
         no_mod_resolve: bool,
     },
+    /// Resolve versions, download artifacts, and materialize the server directory.
+    /// Reuses the existing lockfile when mc-snap.yml is unchanged.
     Install {
         /// Copy artifacts into the server dir instead of linking them from the cache.
         #[arg(long, conflicts_with = "symlink")]
@@ -37,29 +39,45 @@ enum Cmd {
         /// Symlink artifacts on every platform (default: symlink on Unix, hardlink on Windows).
         #[arg(long)]
         symlink: bool,
+        /// Re-resolve all versions even if mc-snap.yml is unchanged (refreshes `latest` pins).
+        #[arg(long)]
+        refresh: bool,
     },
+    /// Parse and validate mc-snap.yml without touching the network.
     Validate,
+    /// Report discovered Java installs, cache paths, and project status.
     Doctor,
+    /// Start the server (foreground by default).
     Start {
+        /// Run the server in the background and record its pid.
         #[arg(long)]
         detach: bool,
     },
+    /// Stop the server gracefully via RCON, escalating to signals if needed.
     Stop,
+    /// Stop the server, wait for the port to free up, then start detached.
     Restart,
+    /// Show whether the server is running and who is online.
     Status,
+    /// Print the server log (logs/latest.log).
     Logs {
+        /// Keep the log open and print new lines as they appear.
         #[arg(short, long)]
         follow: bool,
     },
-    Console {
-        command: Vec<String>,
-    },
+    /// Send an RCON command, or open an interactive console with no arguments.
+    Console { command: Vec<String> },
+    /// Bundle mc-snap.yml + mc-snap.lock + configs/ into a shareable zip.
     Pack {
         #[arg(short, long, default_value = "mc-snap-bundle.zip")]
         out: String,
     },
+    /// Extract a bundle into the current directory.
     Unpack {
         bundle: String,
+        /// Overwrite existing files.
+        #[arg(long)]
+        force: bool,
     },
     /// Update to a newer Minecraft version. Snapshots current state first so it can be reverted.
     Update {
@@ -150,7 +168,11 @@ async fn main() -> Result<()> {
             force,
             no_mod_resolve,
         } => commands::init::run(non_interactive, detect, force, no_mod_resolve).await,
-        Cmd::Install { copy, symlink } => {
+        Cmd::Install {
+            copy,
+            symlink,
+            refresh,
+        } => {
             let mode = if copy {
                 mc_snap::cache::LinkMode::Copy
             } else if symlink {
@@ -158,7 +180,7 @@ async fn main() -> Result<()> {
             } else {
                 mc_snap::cache::LinkMode::Auto
             };
-            commands::install::run(mode).await
+            commands::install::run(mode, refresh).await
         }
         Cmd::Validate => commands::validate::run().await,
         Cmd::Doctor => commands::doctor::run().await,
@@ -169,7 +191,7 @@ async fn main() -> Result<()> {
         Cmd::Logs { follow } => commands::logs::run(follow).await,
         Cmd::Console { command } => commands::console::run(command).await,
         Cmd::Pack { out } => commands::pack::run(&out).await,
-        Cmd::Unpack { bundle } => commands::unpack::run(&bundle).await,
+        Cmd::Unpack { bundle, force } => commands::unpack::run(&bundle, force).await,
         Cmd::Update {
             to,
             skip_missing,
