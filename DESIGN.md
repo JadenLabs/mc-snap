@@ -97,14 +97,17 @@ my-server/
 ├── mc-snap.lock             # pinned versions + hashes (committed)
 ├── configs/                 # external config files referenced by yml
 │   └── sodium-options.json
+├── server.jar               # server root materializes here by default
+├── mods/  world/  logs/     # (or under ./<server.location>/ when set)
 └── .mc-snap/                # generated, gitignored
-    ├── server/              # actual server root (server.jar, mods/, world/, logs/)
     ├── snapshots/           # pre-update yml + lock + configs, used by `revert`
     ├── state.json           # last-applied lockfile hash, install status
     ├── pid                  # running server pid + start-token (for pid-reuse detection)
     ├── rcon.secret          # auto-generated RCON password (mode 0600 on Unix)
     └── .lock                # advisory lock held by mutating commands (install/update/start/...)
 ```
+
+`server.location` (optional, validated relative path) moves the server root into a subdirectory; the default is the project root, alongside `mc-snap.yml`.
 
 Global cache (shared across servers, resolved via `directories::ProjectDirs`):
 `~/.local/share/mc-snap/{cache,jdks}/` on Linux,
@@ -159,8 +162,9 @@ Downloading is shared infrastructure in the `download` module - providers only r
 
 | Command | Purpose |
 |---|---|
-| `mc-snap init [--non-interactive]` | Interactive scaffold of a new `mc-snap.yml`; `--non-interactive` writes the default template |
-| `mc-snap install` | Resolve, download, write `.mc-snap/server/`, update lockfile |
+| `mc-snap init [--non-interactive] [--detect [PATH]]` | Interactive scaffold of a new `mc-snap.yml`; `--detect` pre-fills from an existing server directory |
+| `mc-snap install [--refresh]` | Resolve, download, materialize the server dir, update lockfile. Reuses the lockfile when the yml is unchanged; `--refresh` forces re-resolution |
+| `mc-snap get <slug...> [--version <v>] [--provider <p>]` | Add mods by slug (newest compatible version) and install |
 | `mc-snap update --to <ver> [--skip-missing] [--yes] [--loader <ver>]` | Snapshot, then update yml + lockfile to a new Minecraft version. Auto-rolls back on failure |
 | `mc-snap revert [<id>] [--list]` | Restore a snapshot (latest by default); `--list` shows them |
 | `mc-snap check --to <ver>` | Per-mod compatibility report (no filesystem changes) |
@@ -170,12 +174,13 @@ Downloading is shared infrastructure in the `download` module - providers only r
 | `mc-snap stop` | Graceful stop via RCON `stop` |
 | `mc-snap restart` | `stop` (with port-release wait) then `start --detach` |
 | `mc-snap status` | Running/stopped, uptime, player count (via RCON) |
-| `mc-snap logs [-f]` | Tail `.mc-snap/server/logs/latest.log` |
+| `mc-snap logs [-f]` | Tail the server dir's `logs/latest.log` |
 | `mc-snap console [cmd...]` | One-shot RCON command, or interactive shell with no args |
 | `mc-snap pack [-o out.zip]` | Source bundle: `mc-snap.yml` + `mc-snap.lock` + `configs/` (zip, not tarball) |
-| `mc-snap unpack <bundle.zip>` | Extract bundle into current dir (path-validated, no zip-slip) |
+| `mc-snap unpack <bundle.zip> [--force]` | Extract bundle into current dir (path-validated, no zip-slip; refuses to overwrite without `--force`) |
 | `mc-snap validate` | Schema check without network |
-| `mc-snap doctor` | Verify Java, network reachability, disk space |
+| `mc-snap doctor` | Report Java installs, cache paths, and the current project's requirements |
+| `mc-snap config detect [--all]` | Scan the server's `config/` dir and track new mod config files |
 
 ## Process lifecycle
 
@@ -190,7 +195,7 @@ Downloading is shared infrastructure in the `download` module - providers only r
 1. Probe `JAVA_HOME`, `$PATH` `java`, and platform-typical locations (`/usr/lib/jvm/*`, macOS `/Library/Java/JavaVirtualMachines/*`, common Windows paths).
 2. For each candidate, parse `java -version` output for major version.
 3. If any matches the required major → use it.
-4. Otherwise, download Temurin from `api.adoptium.net` into `~/.mc-snap/jdks/<major>/<os>-<arch>/` and use that. Cache forever.
+4. Otherwise, download Temurin from `api.adoptium.net` into the user data dir (`~/.local/share/mc-snap/jdks/<major>/<os>-<arch>/` on Linux) and use that. Cache forever.
 
 ## Reproducibility / lockfile
 
@@ -217,7 +222,7 @@ url = "https://cdn.modrinth.com/..."
 sha256 = "..."
 ```
 
-`install` is a no-op when `state.json.applied_lock_hash == sha256(mc-snap.lock)`.
+`install` records `yml_hash` (sha256 of the yml's canonical serialization) in the lockfile. When the yml is unchanged, `install` reuses the existing lockfile instead of re-resolving, so `version: latest` entries stay pinned to what the lock recorded; `--refresh` forces a fresh resolution. Stale mod jars that are no longer in the lock are removed from `mods/` on every install.
 
 ## Minecraft 26.x support
 
@@ -242,8 +247,9 @@ The 26.x series is the current default. Concretely, supporting it meant:
 - **Atomic writes.** Cache files, lockfile, yml, snapshots, and pid file are all written via tmp+rename so a crash mid-write can't leave a half-formed file the next run trips over.
 - **Zip extraction is path-validated.** `unpack` and the JDK extractor both walk archive entries by hand, rejecting absolute paths, `..` components, and symlink entries; output paths are canonicalized and asserted to stay under the destination.
 - **RCON secret hygiene.** 32 bytes from `OsRng`, hex-encoded. Written 0600 on Unix. `rcon.ip` is force-set to `127.0.0.1` on every install - the password is plaintext on the wire so we never let it listen externally.
+- **Bundles are untrusted input.** A shared bundle's yml and lockfile pass the same validation as local ones: `server.location` and `config.files` src/dst must be relative paths without `..`, and artifact filenames from the lockfile (or a registry API) must be single path components before they are joined into `mods/` or `datapacks/`.
 - **Project advisory lock.** A `fs2` exclusive lock on `.mc-snap/.lock` serializes mutating commands (install / update / start / stop / revert) so two runs can't stomp each other's yml + server dir.
-- **Download caps.** The reqwest client has bounded redirects (5) and total/connect timeouts. Streamed downloads abort if they exceed a hard size cap.
+- **Download caps.** Every HTTP client (downloads and registry APIs) has bounded redirects (5) and total/connect timeouts. Downloads abort if they exceed a hard size cap.
 
 ## Future scope
 
